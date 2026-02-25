@@ -2,8 +2,19 @@ import { useState, useEffect } from 'react'
 import { ChartComponent } from './components/Chart';
 import './App.css'
 
+// define the incoming WebSocket Message Structure
+interface MarketMessage {
+  price: number;
+  time: number; // timestamp (seconds)
+  bid: number;
+  ask: number;
+  bidVol: number;
+  askVol: number;
+}
+
+// define Candle Structure for the Chart
 interface CandleData {
-  time: string;
+  time: string; 
   open: number;
   high: number;
   low: number;
@@ -14,6 +25,8 @@ function App() {
   const [data, setData] = useState<CandleData[]>([]);
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const [connectionStatus, setConnectionStatus] = useState<string>("DISCONNECTED");
+  
+  const [orderBook, setOrderBook] = useState({ bid: 0, ask: 0, bidVol: 0, askVol: 0 });
 
   useEffect(() => {
     const ws = new WebSocket('ws://localhost:8080');
@@ -23,11 +36,19 @@ function App() {
     };
 
     ws.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-        const price = parseFloat(message.price);
-        const time = Math.floor(message.time / 5) * 5;
+        const message: MarketMessage = JSON.parse(event.data);
+        
+        const price = message.price;
+        const time = Math.floor(message.time / 5) * 5; // 5-second buckets
 
         setCurrentPrice(price);
+
+        setOrderBook({
+            bid: message.bid,
+            ask: message.ask,
+            bidVol: message.bidVol,
+            askVol: message.askVol
+        });
 
         setData(prevData => {
             const lastCandle = prevData[prevData.length - 1];
@@ -74,7 +95,30 @@ function App() {
               colors={{ backgroundColor: '#161b22', textColor: '#c9d1d9' }}
             />
         </div>
-        {/* ... keep order book ... */}
+        
+        <div className="order-book-container">
+            <h3>Live Market Depth</h3>
+            <div className="order-book">
+                {/* ASK SIDE (Sellers) */}
+                <div className="book-row ask">
+                    <span className="side">SELL</span>
+                    <span className="price">{orderBook.ask.toFixed(2)}</span>
+                    <span className="vol">{orderBook.askVol}</span>
+                </div>
+
+                {/* SPREAD */}
+                <div className="spread-row">
+                    Spread: {(orderBook.ask - orderBook.bid).toFixed(2)}
+                </div>
+
+                {/* BID SIDE (Buyers) */}
+                <div className="book-row bid">
+                    <span className="side">BUY</span>
+                    <span className="price">{orderBook.bid.toFixed(2)}</span>
+                    <span className="vol">{orderBook.bidVol}</span>
+                </div>
+            </div>
+        </div>
       </main>
     </div>
   )

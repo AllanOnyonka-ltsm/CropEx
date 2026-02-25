@@ -9,3 +9,54 @@ h1 { margin: 0; font-size: 1.5rem; letter-spacing: -1px; }
 .book-row { padding: 5px; border-bottom: 1px solid #21262d; }
 .ask { color: #ef5350; }
 .bid { color: #26a69a; }
+
+/* Add to App.css */
+.order-book-container {
+    margin-top: 20px;
+    background: #161b22;
+    padding: 15px;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+}
+
+.order-book-container h3 {
+    margin-top: 0;
+    font-size: 0.9rem;
+    color: #8b949e;
+    border-bottom: 1px solid #30363d;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+}
+
+.book-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: bold;
+    margin-bottom: 4px;
+    border-radius: 4px;
+}
+
+.ask {
+    background-color: rgba(239, 83, 80, 0.1);
+    color: #ef5350; /* Red */
+}
+
+.bid {
+    background-color: rgba(38, 166, 154, 0.1);
+    color: #26a69a; /* Green */
+}
+
+.spread-row {
+    text-align: center;
+    font-size: 0.75rem;
+    color: #586069;
+    margin: 5px 0;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.vol {
+    opacity: 0.7;
+}
