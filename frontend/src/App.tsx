@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ChartComponent } from './components/Chart';
 import './App.css'
+import logo from './assets/logo_main.png';
 
 // define the incoming WebSocket Message Structure
 interface MarketMessage {
@@ -82,7 +83,10 @@ function App() {
   return (
     <div className="dashboard">
       <header>
-        <h1>CROPEX{' '} <span className={`status ${connectionStatus.toLowerCase()}`}>{connectionStatus}</span></h1>
+        <div className="brand-lockup" style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+            <img src={logo} alt="CropEx" style={{ height: '70px' }} />
+            <span className={`status ${connectionStatus.toLowerCase()}`}>{connectionStatus}</span>
+        </div>
         <div className="ticker" style={{marginLeft: '10px'}}>
             POTATO / KES <span style={{color: 'white', marginLeft: '10px'}}>{currentPrice.toFixed(2)}</span>
         </div>
