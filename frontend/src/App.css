@@ -1,62 +1,300 @@
-body { background-color: #0d1117; color: #c9d1d9; font-family: 'JetBrains Mono', monospace; margin: 0; }
-.dashboard { padding: 20px; max-width: 1200px; margin: 0 auto; }
-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #30363d; padding-bottom: 20px; margin-bottom: 20px; }
-h1 { margin: 0; font-size: 1.5rem; letter-spacing: -1px; }
-.status { background: #238636; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; vertical-align: middle; }
-.ticker { font-weight: bold; color: #58a6ff; }
-.chart-container { border: 1px solid #30363d; padding: 10px; background: #161b22; }
-.order-book { margin-top: 20px; font-size: 0.9rem; }
-.book-row { padding: 5px; border-bottom: 1px solid #21262d; }
-.ask { color: #ef5350; }
-.bid { color: #26a69a; }
+/* ── BASE ── */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
 
-/* Add to App.css */
-.order-book-container {
-    margin-top: 20px;
-    background: #161b22;
-    padding: 15px;
-    border: 1px solid #30363d;
-    border-radius: 6px;
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  background-color: #0d1117;
+  color: #c9d1d9;
+  font-family: 'JetBrains Mono', monospace;
+  margin: 0;
+  min-height: 100vh;
 }
 
-.order-book-container h3 {
-    margin-top: 0;
-    font-size: 0.9rem;
-    color: #8b949e;
-    border-bottom: 1px solid #30363d;
-    padding-bottom: 10px;
-    margin-bottom: 10px;
+/* ── DASHBOARD ── */
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 
-.book-row {
-    display: flex;
-    justify-content: space-between;
-    padding: 8px 12px;
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: bold;
-    margin-bottom: 4px;
-    border-radius: 4px;
+/* ── HEADER ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  height: 60px;
+  background: #0d1117;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+  z-index: 10;
 }
 
-.ask {
-    background-color: rgba(239, 83, 80, 0.1);
-    color: #ef5350; /* Red */
+.brand-lockup {
+  display: flex;
+  align-items: center;
 }
 
-.bid {
-    background-color: rgba(38, 166, 154, 0.1);
-    color: #26a69a; /* Green */
+.logo {
+  height: 55px;
+  object-fit: contain;
 }
 
-.spread-row {
-    text-align: center;
-    font-size: 0.75rem;
-    color: #586069;
-    margin: 5px 0;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+.header-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.vol {
-    opacity: 0.7;
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.connected    { background: #00ff88; box-shadow: 0 0 6px #00ff88; }
+.status-dot.disconnected { background: #ef5350; box-shadow: 0 0 6px #ef5350; }
+
+.status-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+.status-label.connected    { color: #00ff88; }
+.status-label.disconnected { color: #ef5350; }
+
+.header-ticker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ticker-pair {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #8b949e;
+  letter-spacing: 1px;
+}
+
+.ticker-price {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #58a6ff;
+  letter-spacing: 1px;
+}
+
+/* ── MAIN GRID ── */
+.main-grid {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  flex: 1;
+  overflow: hidden;
+  gap: 0;
+}
+
+/* ── LEFT PANEL ── */
+.left-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid #21262d;
+}
+
+.chart-container {
+  flex: 1;
+  background: #161b22;
+  overflow: hidden;
+}
+
+/* ── RIGHT PANEL ── */
+.right-panel {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: #0d1117;
+  gap: 0;
+}
+
+/* ── PANEL BASE ── */
+.panel {
+  border-bottom: 1px solid #21262d;
+  padding: 12px 14px;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: #8b949e;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #21262d;
+}
+
+.panel-header-sub {
+  font-size: 0.65rem;
+  color: #58a6ff;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.panel-header-badge {
+  font-size: 0.6rem;
+  background: rgba(0,255,136,0.15);
+  color: #00ff88;
+  border: 1px solid rgba(0,255,136,0.3);
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 1px;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+/* ── ORDER BOOK ── */
+.order-book-panel {}
+
+.ob-labels {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  font-size: 0.6rem;
+  color: #586069;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+  padding: 0 4px;
+}
+
+.ob-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 6px 4px;
+  border-radius: 3px;
+  margin-bottom: 3px;
+}
+
+.ob-row.ask { color: #ef5350; background: rgba(239,83,80,0.08); }
+.ob-row.bid { color: #26a69a; background: rgba(38,166,154,0.08); }
+
+.ob-spread {
+  text-align: center;
+  font-size: 0.65rem;
+  color: #586069;
+  padding: 6px 0;
+  letter-spacing: 1px;
+}
+
+/* ── BUY / SELL ── */
+.buysell-panel {}
+
+.bs-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.bs-input-group {
+  display: flex;
+  align-items: center;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bs-input-icon {
+  padding: 0 8px;
+  color: #58a6ff;
+  font-size: 0.8rem;
+  background: #1c2128;
+  border-right: 1px solid #30363d;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.bs-input {
+  width: 100%;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 8px 10px;
+  color: #c9d1d9;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.bs-input-group .bs-input {
+  border: none;
+  border-radius: 0;
+}
+.bs-input::placeholder { color: #586069; }
+.bs-input:focus { border-color: #58a6ff; }
+
+.bs-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.bs-btn {
+  padding: 10px;
+  border: none;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.bs-btn:hover  { opacity: 0.85; transform: translateY(-1px); }
+.bs-btn:active { transform: translateY(0); }
+
+.bs-btn.sell { background: #ef5350; color: #fff; }
+.bs-btn.buy  { background: #26a69a; color: #fff; }
+
+/* ── NEWS ── */
+.news-panel { flex: 1; }
+
+.news-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.news-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #21262d;
+}
+.news-item:last-child { border-bottom: none; }
+
+.news-time {
+  font-size: 0.6rem;
+  color: #586069;
+  letter-spacing: 0.5px;
+}
+
+.news-text {
+  font-size: 0.72rem;
+  color: #8b949e;
+  line-height: 1.4;
 }

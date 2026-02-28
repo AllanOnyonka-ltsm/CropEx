@@ -5,68 +5,70 @@ interface ChartProps {
     data: { time: string; open: number; high: number; low: number; close: number }[];
     colors?: {
         backgroundColor?: string;
-        lineColor?: string;
         textColor?: string;
-        areaTopColor?: string;
-        areaBottomColor?: string;
     };
 }
 
-export const ChartComponent: React.FC<ChartProps> = ({ 
-    data, 
+export const ChartComponent: React.FC<ChartProps> = ({
+    data,
     colors: {
-        backgroundColor = 'white',
-        textColor = 'black',
-    } = {} 
+        backgroundColor = '#161b22',
+        textColor = '#c9d1d9',
+    } = {}
 }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         if (!chartContainerRef.current) return;
 
-        // 1. Initialize Chart
-        const chart = createChart(chartContainerRef.current, {
+        const container = chartContainerRef.current;
+
+        const chart = createChart(container, {
             layout: {
                 background: { type: ColorType.Solid, color: backgroundColor },
                 textColor,
             },
-            width: chartContainerRef.current.clientWidth,
-            height: 400,
+            width: container.clientWidth,
+            height: container.clientHeight,
             grid: {
-                vertLines: { color: '#333' },
-                horzLines: { color: '#333' },
+                vertLines: { color: '#21262d' },
+                horzLines: { color: '#21262d' },
             },
-            // Auto-scale time axis
             timeScale: {
                 timeVisible: true,
                 secondsVisible: true,
+                borderColor: '#30363d',
+            },
+            rightPriceScale: {
+                borderColor: '#30363d',
             },
         });
-        
-        // 2. Add Series (v5 Syntax)
+
         const newSeries = chart.addSeries(CandlestickSeries, {
-            upColor: '#26a69a', 
-            downColor: '#ef5350', 
-            borderVisible: false, 
-            wickUpColor: '#26a69a', 
-            wickDownColor: '#ef5350'
+            upColor: '#26a69a',
+            downColor: '#ef5350',
+            borderVisible: false,
+            wickUpColor: '#26a69a',
+            wickDownColor: '#ef5350',
         });
 
-        newSeries.setData(data as any); 
-        
-        // 3. ZOOM TO FIT (Crucial for small datasets)
+        newSeries.setData(data as any);
         chart.timeScale().fitContent();
 
         const handleResize = () => {
-            if (chartContainerRef.current) {
-                chart.applyOptions({ width: chartContainerRef.current.clientWidth });
+            if (container) {
+                chart.applyOptions({
+                    width: container.clientWidth,
+                    height: container.clientHeight,
+                });
             }
         };
 
-        window.addEventListener('resize', handleResize);
+        const resizeObserver = new ResizeObserver(handleResize);
+        resizeObserver.observe(container);
 
         return () => {
-            window.removeEventListener('resize', handleResize);
+            resizeObserver.disconnect();
             chart.remove();
         };
     }, [data, backgroundColor, textColor]);
@@ -74,7 +76,7 @@ export const ChartComponent: React.FC<ChartProps> = ({
     return (
         <div
             ref={chartContainerRef}
-            style={{ position: 'relative', width: '100%' }}
+            style={{ width: '100%', height: '100%' }}
         />
     );
 };
