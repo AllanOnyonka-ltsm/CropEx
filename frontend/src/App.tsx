@@ -82,8 +82,8 @@ function App() {
   return (
     <div className="dashboard">
       <header>
-        <h1>CROPEX <span className={`status ${connectionStatus.toLowerCase()}`}>{connectionStatus}</span></h1>
-        <div className="ticker">
+        <h1>CROPEX{' '} <span className={`status ${connectionStatus.toLowerCase()}`}>{connectionStatus}</span></h1>
+        <div className="ticker" style={{marginLeft: '10px'}}>
             POTATO / KES <span style={{color: 'white', marginLeft: '10px'}}>{currentPrice.toFixed(2)}</span>
         </div>
       </header>
