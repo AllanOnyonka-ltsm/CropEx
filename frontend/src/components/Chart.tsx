@@ -2,7 +2,7 @@ import { createChart, ColorType, CandlestickSeries } from 'lightweight-charts';
 import React, { useEffect, useRef } from 'react';
 
 interface ChartProps {
-    data: { time: string; open: number; high: number; low: number; close: number }[];
+    data: { time: number; open: number; high: number; low: number; close: number }[];
     colors?: {
         backgroundColor?: string;
         textColor?: string;
@@ -17,10 +17,12 @@ export const ChartComponent: React.FC<ChartProps> = ({
     } = {}
 }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
+    const seriesRef = useRef<any>(null);
+    const chartRef = useRef<any>(null);
 
+    // Create chart ONCE — never recreated on data change
     useEffect(() => {
         if (!chartContainerRef.current) return;
-
         const container = chartContainerRef.current;
 
         const chart = createChart(container, {
@@ -38,13 +40,16 @@ export const ChartComponent: React.FC<ChartProps> = ({
                 timeVisible: true,
                 secondsVisible: true,
                 borderColor: '#30363d',
+                rightOffset: 10,
+                barSpacing: 6,
+                minBarSpacing: 2,
             },
             rightPriceScale: {
                 borderColor: '#30363d',
             },
         });
 
-        const newSeries = chart.addSeries(CandlestickSeries, {
+        const series = chart.addSeries(CandlestickSeries, {
             upColor: '#26a69a',
             downColor: '#ef5350',
             borderVisible: false,
@@ -52,26 +57,30 @@ export const ChartComponent: React.FC<ChartProps> = ({
             wickDownColor: '#ef5350',
         });
 
-        newSeries.setData(data as any);
-        chart.timeScale().fitContent();
+        chartRef.current = chart;
+        seriesRef.current = series;
 
         const handleResize = () => {
-            if (container) {
-                chart.applyOptions({
-                    width: container.clientWidth,
-                    height: container.clientHeight,
-                });
-            }
+            chart.applyOptions({
+                width: container.clientWidth,
+                height: container.clientHeight,
+            });
         };
 
-        const resizeObserver = new ResizeObserver(handleResize);
-        resizeObserver.observe(container);
+        const ro = new ResizeObserver(handleResize);
+        ro.observe(container);
 
         return () => {
-            resizeObserver.disconnect();
+            ro.disconnect();
             chart.remove();
         };
-    }, [data, backgroundColor, textColor]);
+    }, [backgroundColor, textColor]); // no `data` — chart never rebuilds
+
+    // Update series data separately — no fitContent, no reset
+    useEffect(() => {
+        if (!seriesRef.current || data.length === 0) return;
+        seriesRef.current.setData(data);
+    }, [data]);
 
     return (
         <div

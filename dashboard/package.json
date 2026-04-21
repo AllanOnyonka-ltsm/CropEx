@@ -1,0 +1,10 @@
+{
+  "name": "cropex",
+  "private": true,
+  "workspaces": ["frontend", "dashboard"],
+  "scripts": {
+    "frontend": "npm run dev --workspace=frontend",
+    "dashboard": "npm run dev --workspace=dashboard",
+    "dev": "concurrently \"npm run frontend\" \"npm run dashboard\""
+  }
+}
