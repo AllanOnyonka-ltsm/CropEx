@@ -2,17 +2,15 @@ const { spawn } = require('child_process');
 const WebSocket = require('ws');
 
 // news api
-const NEWS_API_KEY = "4ae1762b929c417ea7165a403d4a983c";
-const NEWS_URL = `https://newsapi.org/v2/everything?q=agriculture+Kenya+commodity+maize+wheat&sortBy=publishedAt&language=en&apiKey=${NEWS_API_KEY}`;
+const GNEWS_API_KEY = "cdae864b8249cf59c5b45bdf3a349177";
+const NEWS_URL = `https://gnews.io/api/v4/search?q="commodity" OR "maize" OR "wheat" OR "Kenya agriculture"&lang=en&sortBy=publishedAt&apikey=${GNEWS_API_KEY}`;
 
 // setup websocket server
 const wss = new WebSocket.Server({ port: 8080 });
 console.log("--- cropex bridge live on localhost:8080 ---");
 
-// 1. ADD CACHE STATE FOR NEWS
 let latestNews = [];
 
-// 2. DEFINE THE MISSING BROADCAST FUNCTION
 function broadcast(data) {
     const msg = typeof data === 'string' ? data : JSON.stringify(data);
     wss.clients.forEach(client => {
@@ -22,7 +20,6 @@ function broadcast(data) {
     });
 }
 
-// 3. SEND CACHED NEWS TO NEW CONNECTIONS IMMEDIATELY
 wss.on('connection', (ws) => {
     if (latestNews.length > 0) {
         ws.send(JSON.stringify({ type: 'newsBatch', articles: latestNews }));
@@ -42,7 +39,6 @@ engine.stdout.on('data', (data) => {
         try {
             const json = JSON.parse(line);
             
-            // Refactored to use the new reusable broadcast function
             broadcast(json);
             
             process.stdout.write('.'); 
@@ -66,8 +62,10 @@ async function fetchNews() {
         const res = await fetch(NEWS_URL);
         const data = await res.json();
 
-        if (data.status !== 'ok') {
-            console.error('[news] API error:', data.message);
+        // GNews uses 'errors' instead of 'status: ok' if something goes wrong.
+        // We just check if 'articles' exists.
+        if (!data.articles) {
+            console.error('[news] API error:', data.errors || data);
             return;
         }
 
@@ -89,3 +87,4 @@ async function fetchNews() {
 
 fetchNews();
 setInterval(fetchNews, 5 * 60 * 1000);
+// setInterval(fetchNews, 15 * 60 * 1000);
