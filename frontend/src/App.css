@@ -69,21 +69,35 @@ body {
 .header-ticker {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 20px;
+}
+
+.ticker-titles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
 }
 
 .ticker-pair {
-  font-size: 0.9rem;
+  font-size: 1.2rem;
   font-weight: 700;
-  color: #8b949e;
+  color: #c9d1d9; /* Or whatever your main text color is */
+  line-height: 1.2;
+}
+
+.ticker-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #8b949e; /* Muted grey color */
+  text-transform: uppercase;
   letter-spacing: 1px;
 }
 
 .ticker-price {
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #58a6ff;
-  letter-spacing: 1px;
+  font-size: 1.8rem;
+  font-weight: bold;
+  color: #00ff9d; /* Your cool green color */
 }
 
 /* ── MAIN GRID ── */
@@ -355,4 +369,58 @@ body {
   font-weight: 400;
   color: #8b949e;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── RESPONSIVE DESIGN (MOBILE & TABLET) ── */
+
+@media (max-width: 850px) {
+  /* 1. Header adjustments to save space */
+  .header {
+    padding: 0 12px;
+  }
+
+  .status-label {
+    display: none; /* Hide the word 'CONNECTED', keep the green dot */
+  }
+
+  .ticker-price {
+    font-size: 1.4rem; /* Slightly smaller price */
+  }
+
+  .ticker-pair {
+    font-size: 1rem;
+  }
+
+  /* 2. Switch main grid from columns to vertical stack */
+  .main-grid {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto; /* Allow scrolling down the page */
+  }
+
+  /* 3. Give the chart a fixed height on mobile */
+  .left-panel {
+    flex: none;
+    height: 40vh; /* Chart takes up 40% of the screen height */
+    min-height: 320px; /* But never less than 320px */
+    border-right: none;
+    border-bottom: 1px solid #21262d;
+  }
+
+  /* 4. Let the right panel flow naturally below the chart */
+  .right-panel {
+    flex: none;
+    overflow-y: visible; /* Scroll is handled by .main-grid now */
+  }
+}
+
+/* Extra tweak for very small phones (like iPhone SE - 375px or less) */
+@media (max-width: 400px) {
+  .logo {
+    height: 40px; /* Shrink logo slightly */
+  }
+  
+  .ticker-titles {
+    display: none; /* Hide 'MAZ / KES' to ensure the price fits, user knows what they clicked */
+  }
 }

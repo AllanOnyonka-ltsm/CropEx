@@ -34,10 +34,10 @@ interface SymbolState {
   candles: CandleData[];
 }
 
-const SYMBOLS = ['POTATO','MAIZE','WHEAT','BEANS','ONION','TOMATO','SORGHUM','CASSAVA'];
+const SYMBOLS = ['PTO', 'MAZ', 'WHT', 'BNS', 'ONN', 'TMO', 'SGM', 'CAS'];
 
 function App() {
-  const [selectedSymbol, setSelectedSymbol] = useState<string>('MAIZE');
+  const [selectedSymbol, setSelectedSymbol] = useState<string>('MAZ');
   const [marketData, setMarketData] = useState<Record<string, SymbolState>>({});
   const [connectionStatus, setConnectionStatus] = useState<string>('DISCONNECTED');
   const [news, setNews] = useState<{ title: string; source: string; url: string; publishedAt: string }[]>([]);
@@ -105,7 +105,10 @@ function App() {
         </div>
 
         <div className="header-ticker">
-          <span className="ticker-pair">{selectedSymbol} / KES:</span>
+          <div className="ticker-titles">
+            <span className="ticker-pair">{selectedSymbol} / KES</span>
+            <span className="ticker-name">{active?.name || '...'}</span>
+          </div>
           <span className="ticker-price">{(active?.price ?? 0).toFixed(2)}</span>
         </div>
       </header>
@@ -162,7 +165,11 @@ function App() {
             </div>
           </div>
 
-          <BuySellPanel currentPrice={active?.price ?? 0} symbol={selectedSymbol} />
+          <BuySellPanel 
+              currentPrice={active?.price ?? 0} 
+              symbol={selectedSymbol} 
+              name={active?.name ?? ''} 
+          />
           <NewsFeedPanel articles={news}/>
 
         </div>
@@ -172,7 +179,7 @@ function App() {
 }
 
 /* ── BUY / SELL PANEL ── */
-function BuySellPanel({ currentPrice, symbol }: { currentPrice: number; symbol: string }) {
+function BuySellPanel({ currentPrice, symbol, name }: { currentPrice: number; symbol: string, name:string }) {
   return (
     <div className="panel buysell-panel">
       <div className="panel-header">
