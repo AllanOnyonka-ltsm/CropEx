@@ -36,6 +36,22 @@ export const ChartComponent: React.FC<ChartProps> = ({
                 vertLines: { color: '#21262d' },
                 horzLines: { color: '#21262d' },
             },
+            
+            localization: {
+                timeFormatter: (time: number) => {
+                    // Convert C++ UNIX timestamp (seconds) to JavaScript Date (milliseconds)
+                    const date = new Date(time * 1000);
+                    // Format to local timezone automatically using 24-hour format
+                    return date.toLocaleTimeString(navigator.language, {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false 
+                    });
+                }
+            },
+            // 👆 --------------------------------- 👆
+
             timeScale: {
                 timeVisible: true,
                 secondsVisible: true,

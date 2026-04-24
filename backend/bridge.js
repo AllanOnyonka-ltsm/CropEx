@@ -24,6 +24,25 @@ wss.on('connection', (ws) => {
     if (latestNews.length > 0) {
         ws.send(JSON.stringify({ type: 'newsBatch', articles: latestNews }));
     }
+
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            
+            if (data.type === 'NEW_ORDER') {
+                console.log(`\n[ORDER RECEIVED] ${data.side} ${data.qty} ${data.symbol} @ KES ${data.price}`);
+                
+                // Route the order to the C++ Engine via standard input (stdin)
+                // We add a newline (\n) so C++ knows the JSON string is complete
+                if (engine && !engine.killed) {
+                    engine.stdin.write(JSON.stringify(data) + '\n');
+                }
+            }
+        } catch (err) {
+            console.error('[ws] error parsing incoming message:', err);
+        }
+    });
+    
 });
 
 // spawn the c++ engine
@@ -62,8 +81,6 @@ async function fetchNews() {
         const res = await fetch(NEWS_URL);
         const data = await res.json();
 
-        // GNews uses 'errors' instead of 'status: ok' if something goes wrong.
-        // We just check if 'articles' exists.
         if (!data.articles) {
             console.error('[news] API error:', data.errors || data);
             return;
@@ -76,8 +93,6 @@ async function fetchNews() {
             url: a.url,
             publishedAt: a.publishedAt,
         }));
-
-        // Now broadcast works correctly!
         broadcast({ type: 'newsBatch', articles: latestNews });
         console.log(`\n[news] fetched ${latestNews.length} articles`);
     } catch (err) {
