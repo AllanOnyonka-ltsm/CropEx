@@ -1,18 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { ChartComponent } from './components/Chart';
 import './App.css'
 import logo from './assets/logo_main.png';
 
-interface MarketMessage {
-  symbol: string;
-  name: string;
-  unit: string;
-  price: number;
-  time: number;
-  bid: number;
-  ask: number;
-  bidVol: number;
-  askVol: number;
+interface Toast {
+  id: number;
+  message: string;
+  type: 'BUY' | 'SELL';
 }
 
 interface CandleData {
@@ -34,16 +28,31 @@ interface SymbolState {
   candles: CandleData[];
 }
 
-const SYMBOLS = ['POTATO','MAIZE','WHEAT','BEANS','ONION','TOMATO','SORGHUM','CASSAVA'];
+const SYMBOLS = ['PTO', 'MAZ', 'WHT', 'BNS', 'ONN', 'TMO', 'SGM', 'CAS'];
 
 function App() {
-  const [selectedSymbol, setSelectedSymbol] = useState<string>('MAIZE');
+  const [selectedSymbol, setSelectedSymbol] = useState<string>('MAZ');
   const [marketData, setMarketData] = useState<Record<string, SymbolState>>({});
   const [connectionStatus, setConnectionStatus] = useState<string>('DISCONNECTED');
   const [news, setNews] = useState<{ title: string; source: string; url: string; publishedAt: string }[]>([]);
 
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const showToast = (message: string, type: 'BUY' | 'SELL') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, message, type }]);
+    
+    // Auto-remove after 3 seconds
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 3000);
+  };
+
+  const wsRef = useRef<WebSocket | null>(null);
+
   useEffect(() => {
     const ws = new WebSocket('ws://localhost:8080');
+    wsRef.current = ws;
     ws.onopen = () => setConnectionStatus('CONNECTED');
 
     ws.onmessage = (event) => {
@@ -105,7 +114,10 @@ function App() {
         </div>
 
         <div className="header-ticker">
-          <span className="ticker-pair">{selectedSymbol} / KES:</span>
+          <div className="ticker-titles">
+            <span className="ticker-pair">{selectedSymbol} / KES</span>
+            <span className="ticker-name">{active?.name || '...'}</span>
+          </div>
           <span className="ticker-price">{(active?.price ?? 0).toFixed(2)}</span>
         </div>
       </header>
@@ -162,38 +174,111 @@ function App() {
             </div>
           </div>
 
-          <BuySellPanel currentPrice={active?.price ?? 0} symbol={selectedSymbol} />
+          <BuySellPanel 
+              currentPrice={active?.price ?? 0} 
+              symbol={selectedSymbol} 
+              name={active?.name ?? ''} 
+              onPlaceOrder={(side, price, qty) => {
+                  const order = {
+                      type: 'NEW_ORDER',
+                      symbol: selectedSymbol,
+                      side: side,
+                      price: price,
+                      qty: qty,
+                      timestamp: Date.now(),
+                      userId: "user_123" 
+                  };
+                  if (wsRef.current?.readyState === WebSocket.OPEN) {
+                      wsRef.current.send(JSON.stringify(order));
+                  } else {
+                      showToast("ERROR: NOT CONNECTED TO EXCHANGE", "SELL");
+                      return;
+                  }
+                  
+                  // 👇 REPLACED ALERT WITH TOAST 👇
+                  showToast(`ORDER SENT: ${side} ${qty} ${selectedSymbol} @ KES ${price.toFixed(2)}`, side);
+              }}
+          />
           <NewsFeedPanel articles={news}/>
 
         </div>
       </div>
+
+      {/* ── TOAST NOTIFICATIONS ── */}
+      <div className="toast-container">
+        {toasts.map(t => (
+          <div key={t.id} className={`toast ${t.type.toLowerCase()}`}>
+            <span className="toast-icon">{t.type === 'BUY' ? '▲' : '▼'}</span>
+            <span className="toast-msg">{t.message}</span>
+          </div>
+        ))}
+      </div>
+
     </div>
   );
 }
 
 /* ── BUY / SELL PANEL ── */
-function BuySellPanel({ currentPrice, symbol }: { currentPrice: number; symbol: string }) {
+function BuySellPanel({ 
+  currentPrice, 
+  symbol, 
+  name, 
+  onPlaceOrder 
+}: { 
+  currentPrice: number; 
+  symbol: string; 
+  name: string;
+  onPlaceOrder: (side: 'BUY' | 'SELL', price: number, qty: number) => void;
+}) {
+  const [qty, setQty] = useState<string>('');
+  // We use currentPrice as default, but a real trader could type a limit order price here
+  const [orderPrice, setOrderPrice] = useState<string>('');
+
+  const handleTrade = (side: 'BUY' | 'SELL') => {
+    const finalPrice = orderPrice ? parseFloat(orderPrice) : currentPrice;
+    const finalQty = parseInt(qty);
+
+    if (!finalQty || finalQty <= 0) {
+      alert("Please enter a valid quantity.");
+      return;
+    }
+
+    onPlaceOrder(side, finalPrice, finalQty);
+    setQty(''); // clear input after ordering
+  };
+
   return (
     <div className="panel buysell-panel">
       <div className="panel-header">
-        BUY / SELL
+        TRADE {name.toUpperCase()}
         <span className="panel-header-sub">KES {currentPrice.toFixed(2)}</span>
       </div>
       <div className="bs-inputs">
         <div className="bs-input-group">
           <span className="bs-input-icon">KES</span>
-          <input className="bs-input" type="number" placeholder={currentPrice.toFixed(2)} readOnly />
+          <input 
+            className="bs-input" 
+            type="number" 
+            placeholder={currentPrice.toFixed(2)} 
+            value={orderPrice}
+            onChange={(e) => setOrderPrice(e.target.value)}
+          />
         </div>
-        <input className="bs-input" type="number" placeholder="QUANTITY (bags)" />
+        <input 
+          className="bs-input" 
+          type="number" 
+          placeholder="QUANTITY (bags)" 
+          value={qty}
+          onChange={(e) => setQty(e.target.value)}
+        />
       </div>
       <div className="bs-buttons">
-        <button className="bs-btn sell">SELL {symbol}</button>
-        <button className="bs-btn buy">BUY {symbol}</button>
+        <button className="bs-btn sell" onClick={() => handleTrade('SELL')}>SELL {symbol}</button>
+        <button className="bs-btn buy" onClick={() => handleTrade('BUY')}>BUY {symbol}</button>
       </div>
     </div>
   );
 }
-
 /* ── NEWS FEED PANEL ── */
 function NewsFeedPanel({ articles }: { articles: { title: string; source: string; url: string; publishedAt: string }[] }) {
     const items = articles.length > 0 ? articles : [
@@ -215,6 +300,8 @@ function NewsFeedPanel({ articles }: { articles: { title: string; source: string
                     </div>
                 ))}
             </div>
+
+            
         </div>
     );
 }

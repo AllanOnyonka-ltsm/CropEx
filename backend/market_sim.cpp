@@ -1,92 +1,186 @@
 #include <iostream>
-#include <random>
+#include <string>
 #include <vector>
+#include <map>
 #include <thread>
 #include <chrono>
+#include <mutex>
 #include <iomanip>
-#include <ctime>
-#include <sstream>
+#include <random>
+#include <cmath>
 
+std::string extract_string(const std::string& json, const std::string& key) {
+    std::string target = "\"" + key + "\":\"";
+    size_t pos = json.find(target);
+    if (pos == std::string::npos) return "";
+    pos += target.length();
+    size_t end = json.find("\"", pos);
+    return json.substr(pos, end - pos);
+}
 
-const int TICK_SPEED_MS = 100; 
+double extract_number(const std::string& json, const std::string& key) {
+    std::string target = "\"" + key + "\":";
+    size_t pos = json.find(target);
+    if (pos == std::string::npos) return 0.0;
+    pos += target.length();
+    size_t end = json.find_first_of(",}", pos);
+    try { return std::stod(json.substr(pos, end - pos)); } catch (...) { return 0.0; }
+}
 
-struct Commodity {
+struct OrderBook {
     std::string symbol;
     std::string name;
-    double startPrice;
-    double volatility;
-    std::string unit; // "kg", "90kg bag", "tonne"
-};
+    std::string unit;
+    double last_price;
 
-const std::vector<Commodity> COMMODITIES = {
-    { "POTATO",  "Potatoes",      5000.0, 0.002, "90kg bag" },
-    { "MAIZE",   "Maize",         3200.0, 0.0015,"90kg bag" },
-    { "WHEAT",   "Wheat",         4100.0, 0.0018,"90kg bag" },
-    { "BEANS",   "Beans",         8500.0, 0.003, "90kg bag" },
-    { "ONION",   "Onions",        6000.0, 0.004, "90kg bag" },
-    { "TOMATO",  "Tomatoes",      4500.0, 0.006, "90kg bag" },
-    { "SORGHUM", "Sorghum",       2800.0, 0.002, "90kg bag" },
-    { "CASSAVA", "Cassava",       1800.0, 0.0025,"50kg bag" },
-};
+    std::map<double, int, std::greater<double>> bids;
+    // Asks = Sellers (Sorted lowest price first)
+    std::map<double, int> asks; 
+    
+    std::mutex mtx; 
 
-class MarketEngine {
-private:
-    double current_price;
-    std::mt19937 gen; 
-    std::normal_distribution<> d; 
+    OrderBook(std::string sym, std::string n, std::string u, double start_price) 
+        : symbol(sym), name(n), unit(u), last_price(start_price) {}
 
-public:
-    MarketEngine(double start_price, double volatility) 
-        : current_price(start_price), 
-          gen(std::random_device{}()), 
-          d(0.0, volatility) {}
-
-    double tick() {
-        // geometric brownian motion (simplified)
-        // price(t) = price(t-1) * (1 + shock)
-        double shock = d(gen); 
-        current_price = current_price * (1.0 + shock);
-        return current_price;
+    void place_order(std::string side, double price, int qty) {
+        std::lock_guard<std::mutex> lock(mtx);
+        
+        if (side == "BUY") {
+            while (qty > 0 && !asks.empty() && asks.begin()->first <= price) {
+                auto best_ask = asks.begin();
+                int trade_qty = std::min(qty, best_ask->second);
+                
+                qty -= trade_qty;
+                best_ask->second -= trade_qty;
+                last_price = best_ask->first;
+                
+                if (best_ask->second == 0) asks.erase(best_ask); 
+            }
+            if (qty > 0) bids[price] += qty;
+        } 
+        else if (side == "SELL") {
+            while (qty > 0 && !bids.empty() && bids.begin()->first >= price) {
+                auto best_bid = bids.begin();
+                int trade_qty = std::min(qty, best_bid->second);
+                
+                qty -= trade_qty;
+                best_bid->second -= trade_qty;
+                last_price = best_bid->first; 
+                
+                if (best_bid->second == 0) bids.erase(best_bid);
+            }
+            if (qty > 0) asks[price] += qty;
+        }
     }
 };
 
-// helper to get current time as string
-std::string get_iso_datetime() {
-    auto now = std::chrono::system_clock::now();
-    auto in_time_t = std::chrono::system_clock::to_time_t(now);
-    std::stringstream ss;
-    ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S");
-    return ss.str();
+// Global Market State
+std::vector<OrderBook*> market;
+
+void input_listener() {
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        std::string type = extract_string(line, "type");
+        if (type == "NEW_ORDER") {
+            std::string symbol = extract_string(line, "symbol");
+            std::string side = extract_string(line, "side");
+            double price = extract_number(line, "price");
+            int qty = (int)extract_number(line, "qty");
+            for (auto* book : market) {
+                if (book->symbol == symbol) {
+                    book->place_order(side, price, qty);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void seed_market() {
+    market.push_back(new OrderBook("PTO", "Potatoes", "90kg bag", 5000.0));
+    market.push_back(new OrderBook("MAZ", "Maize", "90kg bag", 3200.0));
+    market.push_back(new OrderBook("WHT", "Wheat", "90kg bag", 4100.0));
+    market.push_back(new OrderBook("BNS", "Beans", "90kg bag", 8500.0));
+    market.push_back(new OrderBook("ONN", "Onions", "90kg bag", 6000.0));
+    market.push_back(new OrderBook("TMO", "Tomatoes", "90kg bag", 4500.0));
+    market.push_back(new OrderBook("SGM", "Sorghum", "90kg bag", 2800.0));
+    market.push_back(new OrderBook("CAS", "Cassava", "50kg bag", 1800.0));
+
+    for (auto* book : market) {
+        book->place_order("BUY", book->last_price - 10, 500);
+        book->place_order("SELL", book->last_price + 10, 500);
+    }
+}
+
+void market_maker_bot() {
+    std::mt19937 gen(std::random_device{}());
+    std::uniform_int_distribution<> action(0, 1); 
+    std::uniform_int_distribution<> qty_gen(10, 50); 
+    std::normal_distribution<> price_noise(0.0, 3.0);
+
+    while (true) {
+        for (auto* book : market) {
+            double offset = price_noise(gen);
+            double price = book->last_price + offset;
+            
+            price = std::round(price * 100.0) / 100.0; 
+            
+            int qty = qty_gen(gen);
+            std::string side = action(gen) == 0 ? "BUY" : "SELL";
+
+            book->place_order(side, price, qty);
+
+            std::lock_guard<std::mutex> lock(book->mtx);
+            if (book->bids.size() > 15) {
+                auto it = book->bids.begin();
+                std::advance(it, 15);
+                book->bids.erase(it, book->bids.end());
+            }
+            if (book->asks.size() > 15) {
+                auto it = book->asks.begin();
+                std::advance(it, 15);
+                book->asks.erase(it, book->asks.end());
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
 }
 
 int main() {
-    std::vector<MarketEngine> engines;
-    for (const auto& c : COMMODITIES) {
-        engines.emplace_back(c.startPrice, c.volatility);
-    }
+    seed_market();
+    std::thread listener(input_listener);
+    listener.detach(); 
+
+    std::thread bots(market_maker_bot);
+    bots.detach();
 
     while (true) {
-        auto now = std::chrono::system_clock::now();
-        auto now_c = std::chrono::system_clock::to_time_t(now);
+        auto now_c = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
-        for (size_t i = 0; i < COMMODITIES.size(); i++) {
-            double price = engines[i].tick();
-            double spread = price * 0.001;
+        for (auto* book : market) {
+            std::lock_guard<std::mutex> lock(book->mtx);
+            
+            // Get best bid/ask
+            double bid = book->bids.empty() ? book->last_price : book->bids.begin()->first;
+            int bidVol = book->bids.empty() ? 0 : book->bids.begin()->second;
+            
+            double ask = book->asks.empty() ? book->last_price : book->asks.begin()->first;
+            int askVol = book->asks.empty() ? 0 : book->asks.begin()->second;
 
             std::cout << "{"
-                      << "\"symbol\":\"" << COMMODITIES[i].symbol << "\","
-                      << "\"name\":\"" << COMMODITIES[i].name << "\","
-                      << "\"unit\":\"" << COMMODITIES[i].unit << "\","
-                      << "\"price\":" << std::fixed << std::setprecision(2) << price << ","
-                      << "\"bid\":"   << price - spread << ","
-                      << "\"ask\":"   << price + spread << ","
-                      << "\"bidVol\":" << (rand() % 500 + 100) << ","
-                      << "\"askVol\":" << (rand() % 500 + 100) << ","
-                      << "\"time\":"  << now_c
+                      << "\"symbol\":\"" << book->symbol << "\","
+                      << "\"name\":\"" << book->name << "\","
+                      << "\"unit\":\"" << book->unit << "\","
+                      << "\"price\":" << std::fixed << std::setprecision(2) << book->last_price << ","
+                      << "\"bid\":" << bid << ","
+                      << "\"ask\":" << ask << ","
+                      << "\"bidVol\":" << bidVol << ","
+                      << "\"askVol\":" << askVol << ","
+                      << "\"time\":" << now_c
                       << "}" << std::endl;
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(TICK_SPEED_MS));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
     return 0;
