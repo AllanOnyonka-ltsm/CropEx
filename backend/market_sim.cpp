@@ -1,3 +1,4 @@
+#define WIN32_LEAN_AND_MEAN
 #include <iostream>
 #include <string>
 #include <vector>
@@ -8,6 +9,35 @@
 #include <iomanip>
 #include <random>
 #include <cmath>
+#include "httplib.h"
+#include "json.hpp"
+
+
+using json = nlohmann::json;
+
+void query_python_ai(const std::string& farmer_text) {
+    json payload = {
+        {"message", farmer_text},
+        {"farmer_id", "12345"}
+    };
+
+    httplib::Client cli("localhost", 8000);
+
+    auto res = cli.Post("/predict", payload.dump(), "application/json");
+
+    if (res && res->status == 200) {
+        auto ai_response = json::parse(res->body);
+        std::cout << "[AI PARSED] Action: " << ai_response["action"] << std::endl;
+        
+        // Example: If AI says "BUY", trigger your Matching Engine here
+        // if (ai_response["action"] == "BUY") {
+        //     market[0]->place_order("BUY", ai_response["price"], ai_response["qty"]);
+        // }
+    } else {
+        std::cerr << "[HTTP ERROR] Failed to connect to Python AI." << std::endl;
+        if (res) std::cerr << "Status: " << res->status << std::endl;
+    }
+}
 
 std::string extract_string(const std::string& json, const std::string& key) {
     std::string target = "\"" + key + "\":\"";
