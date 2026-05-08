@@ -1,9 +1,51 @@
 const { spawn } = require('child_process');
 const WebSocket = require('ws');
 
+const express = require('express');
+const twilio = require('twilio');
+
 // news api
 const GNEWS_API_KEY = "cdae864b8249cf59c5b45bdf3a349177";
 const NEWS_URL = `https://gnews.io/api/v4/search?q="commodity" OR "maize" OR "wheat" OR "Kenya agriculture"&lang=en&sortBy=publishedAt&apikey=${GNEWS_API_KEY}`;
+
+// twilio api
+const twilioClient = twilio('AC33fa0c99c8f730fe28e8fc2f02610cbf', '2514b481130167f01f238e628f5ec344');
+const TWILIO_SANDBOX_NUMBER = 'whatsapp:+14155238886';
+
+// express server
+const app = express();
+app.use(express.urlencoded({ extended: true }));
+
+app.post('/webhook', (req, res) => {
+    const incomingMsg = req.body.Body.toLowerCase();
+    const fromNumber = req.body.From; 
+
+    console.log(`\n[WHATSAPP RCVD] From: ${fromNumber} | Msg: ${incomingMsg}`);
+
+    let symbol = '';
+    if (incomingMsg.includes('tomato')) symbol = 'TMO';
+    else if (incomingMsg.includes('potato')) symbol = 'PTO';
+    else if (incomingMsg.includes('onion')) symbol = 'ONN';
+    // i will add more crops here later //liman
+
+    if (symbol) {
+        // Send request down to C++ with the farmer's phone number
+        if (engine && !engine.killed) {
+            engine.stdin.write(JSON.stringify({ type: 'ASK_AI', symbol: symbol, phone: fromNumber }) + '\n');
+        }
+    } else {
+        twilioClient.messages.create({
+            body: "Welcome to CropEx! Ask me about crop prices, e.g., 'What is the forecast for tomatoes?'",
+            from: TWILIO_SANDBOX_NUMBER,
+            to: fromNumber
+        });
+    }
+
+    // receipt to Twilio immediately so it doesn't timeout
+    res.send('<Response></Response>'); 
+});
+
+app.listen(5000, () => console.log("--- twilio webhook listening on port 5000 ---"));
 
 // setup websocket server
 const wss = new WebSocket.Server({ port: 8080 });
@@ -31,9 +73,6 @@ wss.on('connection', (ws) => {
             
             if (data.type === 'NEW_ORDER') {
                 console.log(`\n[ORDER RECEIVED] ${data.side} ${data.qty} ${data.symbol} @ KES ${data.price}`);
-                
-                // Route the order to the C++ Engine via standard input (stdin)
-                // We add a newline (\n) so C++ knows the JSON string is complete
                 if (engine && !engine.killed) {
                     engine.stdin.write(JSON.stringify(data) + '\n');
                 }
@@ -58,9 +97,18 @@ engine.stdout.on('data', (data) => {
         try {
             const json = JSON.parse(line);
             
-            broadcast(json);
-            
-            process.stdout.write('.'); 
+            if (json.type === 'AI_RESPONSE') {
+                console.log(`[SENDING WHATSAPP TO ${json.phone}]`);
+                twilioClient.messages.create({
+                    body: json.message,
+                    from: TWILIO_SANDBOX_NUMBER,
+                    to: json.phone
+                }).then(message => console.log(`✓ Message Sent! SID: ${message.sid}`))
+                  .catch(err => console.error("Twilio Error:", err));
+            } else {
+                broadcast(json);
+                process.stdout.write('.'); 
+            } 
         } catch (e) {
             // ignore partial fragments
         }

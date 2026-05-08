@@ -1,3 +1,4 @@
+#define WIN32_LEAN_AND_MEAN
 #include <iostream>
 #include <string>
 #include <vector>
@@ -8,6 +9,35 @@
 #include <iomanip>
 #include <random>
 #include <cmath>
+#include "httplib.h"
+#include "json.hpp"
+
+
+using json = nlohmann::json;
+
+void query_python_ai(const std::string& farmer_text) {
+    json payload = {
+        {"message", farmer_text},
+        {"farmer_id", "12345"}
+    };
+
+    httplib::Client cli("localhost", 8000);
+
+    auto res = cli.Post("/predict", payload.dump(), "application/json");
+
+    if (res && res->status == 200) {
+        auto ai_response = json::parse(res->body);
+        std::cout << "[AI PARSED] Action: " << ai_response["action"] << std::endl;
+        
+        // Example: If AI says "BUY", trigger your Matching Engine here
+        // if (ai_response["action"] == "BUY") {
+        //     market[0]->place_order("BUY", ai_response["price"], ai_response["qty"]);
+        // }
+    } else {
+        std::cerr << "[HTTP ERROR] Failed to connect to Python AI." << std::endl;
+        if (res) std::cerr << "Status: " << res->status << std::endl;
+    }
+}
 
 std::string extract_string(const std::string& json, const std::string& key) {
     std::string target = "\"" + key + "\":\"";
@@ -77,21 +107,85 @@ struct OrderBook {
 // Global Market State
 std::vector<OrderBook*> market;
 
+// ─── AI FORECASTING INTEGRATION ───
+std::string get_whatsapp_forecast(std::string crop_name, double current_price) {
+    httplib::Client cli("localhost", 8000);
+
+    json predict_payload = {
+        {"date", "2025-12-05"}, // Hardcoded for prototype
+        {"admin1", "Nairobi"},
+        {"market", "Wakulima (Nairobi)"},
+        {"commodity", crop_name}, // e.g., "tomatoes"
+        {"pricetype", "wholesale"},
+        {"previous_month_price", current_price}
+    };
+
+    auto res1 = cli.Post("/predict", predict_payload.dump(), "application/json");
+    if (!res1 || res1->status != 200) {
+        return "Sorry, the AI forecasting service is currently down.";
+    }
+
+    auto prediction_data = json::parse(res1->body);
+
+    json format_payload = {
+        {"prediction_data", prediction_data},
+        {"format_type", "whatsapp"},
+        {"language", "english"}
+    };
+
+    auto res2 = cli.Post("/format", format_payload.dump(), "application/json");
+    if (!res2 || res2->status != 200) {
+        return "Sorry, could not format the AI response.";
+    }
+
+    auto format_data = json::parse(res2->body);
+    
+    // Return the formatted WhatsApp string
+    return format_data["formatted_message"]; 
+}
+
+// ─── THREAD 1: LISTEN FOR ORDERS FROM NODE.JS ───
 void input_listener() {
     std::string line;
     while (std::getline(std::cin, line)) {
         std::string type = extract_string(line, "type");
+        
         if (type == "NEW_ORDER") {
             std::string symbol = extract_string(line, "symbol");
             std::string side = extract_string(line, "side");
             double price = extract_number(line, "price");
             int qty = (int)extract_number(line, "qty");
+
             for (auto* book : market) {
                 if (book->symbol == symbol) {
                     book->place_order(side, price, qty);
                     break;
                 }
             }
+        } 
+        else if (type == "ASK_AI") {
+            // listen for WhatsApp requests
+            std::string symbol = extract_string(line, "symbol");
+            std::string phone = extract_string(line, "phone");
+            std::string full_name = "";
+            double current_price = 0.0;
+
+            for (auto* book : market) {
+                if (book->symbol == symbol) {
+                    full_name = book->name; 
+                    current_price = book->last_price;
+                    break;
+                }
+            }
+
+            // convert name to lowercase for the Python API (e.g., "Tomatoes" -> "tomatoes")
+            std::string crop_lower = full_name;
+            for(auto& c : crop_lower) c = tolower(c);
+
+            // Call Python
+            std::string whatsapp_reply = get_whatsapp_forecast(crop_lower, current_price);
+            
+             std::cout << "{\"type\":\"AI_RESPONSE\", \"phone\":\"" << phone << "\", \"message\":" << json(whatsapp_reply).dump() << "}" << std::endl;
         }
     }
 }
