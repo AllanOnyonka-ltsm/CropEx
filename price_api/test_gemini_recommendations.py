@@ -1,4 +1,28 @@
-#!/usr/bin/env python3
+feat: Intelligent intent routing + Gemini-powered recommendations
+
+✅ READY FOR NODE.JS/TWILIO INTEGRATION
+
+New Features:
+- POST /webhook — Intent classification (GREETING/PRICE_QUERY/SELL_ORDER/BUY_ORDER/UNKNOWN)
+  • Rule-based parser (fast) + Gemini fallback (fuzzy/Swahili)
+  • Returns structured intent + crop symbol for C++ engine
+  • Includes fallback SMS for GREETING/UNKNOWN
+
+- POST /recommendations — Gemini-generated farmer messages
+  • Takes prediction data → generates WhatsApp-ready text
+  • Bilingual-aware (English + Swahili emojis)
+  • Fallback template if LLM fails
+
+Documentation:
+- SCHEMAS.md — Complete request/response specs for all endpoints
+- INTEGRATION_GUIDE.md — Flow diagram + checklist for Node.js integration
+
+To Use:
+1. Parse Twilio webhook (form-encoded) → POST to /webhook
+2. Handle response: sms field? Send it. intent field? Route to C++.
+3. For price flow: /predict → /recommendations → send farmer_message
+
+Branch: feat/gemini-enhanced-endpoints (keep isolated)#!/usr/bin/env python3
 """
 Test Gemini-powered recommendations endpoint.
 Verifies that /recommendations uses LLM to generate farmer-friendly WhatsApp messages.
