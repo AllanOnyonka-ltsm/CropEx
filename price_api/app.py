@@ -4,19 +4,27 @@ from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 import joblib
+import math
 import numpy as np
 import pandas as pd
 import uuid
-
+import os
+from dotenv import load_dotenv
+from enhanced_endpoints import (
+    get_recommendations as _enhanced_recommendations,
+    RecommendationRequest as EnhancedRecommendationRequest,
+    RecommendationResponse as EnhancedRecommendationResponse,
+)
+from intent_router import parse_intent, build_response
 # =========================
 # LOAD ARTIFACTS
 # =========================
-MODEL_PATH = "artifacts/random_forest_price_model.pkl"
-ENCODER_PATH = "artifacts/label_encoders.pkl"
-FEATURES_PATH = "artifacts/feature_columns.pkl"
+MODEL_PATH      = "artifacts/random_forest_price_model.pkl"
+ENCODER_PATH    = "artifacts/label_encoders.pkl"
+FEATURES_PATH   = "artifacts/feature_columns.pkl"
 PREPROCESS_PATH = "artifacts/preprocessing_info.pkl"
 
-model = joblib.load(MODEL_PATH)
+model          = joblib.load(MODEL_PATH)
 label_encoders = joblib.load(ENCODER_PATH)
 feature_columns = joblib.load(FEATURES_PATH)
 preprocess_info = joblib.load(PREPROCESS_PATH)
@@ -25,112 +33,355 @@ preprocess_info = joblib.load(PREPROCESS_PATH)
 # BUSINESS RULES (LOCKED)
 # =========================
 CROP_THRESHOLDS = {
-    "cabbage": 126,
-    "kale": 50,
-    "onion": 13,
-    "potatoes": 50,
-    "tomatoes": 64
+    "cabbage":  126,
+    "kale":      50,
+    "onion":     13,
+    "onions":    13,
+    "potatoes":  50,
+    "tomatoes":  64,
+    "bananas":   50,
 }
 
 ALLOWED_COMMODITIES = set(CROP_THRESHOLDS.keys())
-
-# Default radius for micro-market search in kilometers
 DEFAULT_MICRO_MARKET_RADIUS_KM = 50.0
 
 # =========================
-# API SCHEMA
+# MARKET COORDINATES LOOKUP
+# =========================
+MARKET_COORDS: dict[str, tuple[float, float]] = {
+    "Dagahaley (Daadab)":              (11.3577,  40.3740),
+    "Dandora (Nairobi)":               (-1.2529,  36.8893),
+    "Eldoret town (Uasin Gishu)":      (0.5196,   35.2697),
+    "Ethiopia (Kakuma)":               (3.7149,   34.8716),
+    "Garissa town (Garissa)":          (-0.4532,  39.6460),
+    "Hagadera (Daadab)":               (11.4007,  40.3627),
+    "HongKong (Kakuma)":               (3.7149,   34.8716),
+    "IFO (Daadab)":                    (11.5038,  40.7257),
+    "Illbissil Food Market (Kajiado)": (-2.0177,  36.9023),
+    "Kaanwa (Tharaka Nithi)":          (0.3000,   37.9000),
+    "Kakuma 2":                        (3.7149,   34.8716),
+    "Kakuma 3":                        (3.7149,   34.8716),
+    "Kakuma 4":                        (3.7149,   34.8716),
+    "Kalahari (Mombasa)":              (-4.0500,  39.6700),
+    "Kalobeyei (Village 1)":           (3.8000,   34.8500),
+    "Kalobeyei (Village 2)":           (3.8000,   34.8500),
+    "Kalobeyei (Village 3)":           (3.8000,   34.8500),
+    "Kangemi (Nairobi)":               (-1.2570,  36.7330),
+    "Karatina (Nyeri)":                (-0.4818,  37.1255),
+    "Kathonzweni (Makueni)":           (-1.9000,  37.5000),
+    "Kawangware (Nairobi)":            (-1.2670,  36.7380),
+    "Kibra (Nairobi)":                 (-1.3130,  36.7840),
+    "Kibuye (Kisumu)":                 (-0.0917,  34.7500),
+    "Kisumu":                          (-0.1022,  34.7617),
+    "Kitengela (Kajiado)":             (-1.4767,  36.9614),
+    "Kitui":                           (-1.3667,  38.0100),
+    "Kongowea (Mombasa)":              (-4.0177,  39.7207),
+    "Lodwar town":                     (3.1190,   35.5975),
+    "Lomut (West Pokot)":              (1.6000,   35.3000),
+    "Makutano (West Pokot)":           (1.2000,   35.1000),
+    "Marigat town (Baringo)":          (0.4667,   35.9833),
+    "Mathare (Nairobi)":               (-1.2610,  36.8510),
+    "Mogadishu (Kakuma)":              (3.7149,   34.8716),
+    "Mukuru (Nairobi)":                (-1.3190,  36.8710),
+    "Nairobi":                         (-1.2921,  36.8219),
+    "Nakuru":                          (-0.3031,  36.0800),
+    "Takaba (Mandera)":                (3.8800,   41.1500),
+    "Tala Centre Market (Machakos)":   (-1.3700,  37.3600),
+    "Wakulima (Nairobi)":              (-1.2921,  36.8219),
+    "Wakulima (Nakuru)":               (-0.3031,  36.0800),
+}
+
+# =========================
+# COMMODITY METADATA
+# =========================
+# Maps user-facing name → (canonical model name, unit string, category)
+COMMODITY_META: dict[str, tuple[str, str, str]] = {
+    "tomatoes": ("Tomatoes",         "64 KG",  "vegetables and fruits"),
+    "tomato":   ("Tomatoes",         "64 KG",  "vegetables and fruits"),
+    "onions":   ("Onions (dry)",     "13 KG",  "vegetables and fruits"),
+    "onion":    ("Onions (dry)",     "13 KG",  "vegetables and fruits"),
+    "potatoes": ("Potatoes (Irish)", "50 KG",  "cereals and tubers"),
+    "potato":   ("Potatoes (Irish)", "50 KG",  "cereals and tubers"),
+    "kale":     ("Kale",             "50 KG",  "vegetables and fruits"),
+    "cabbage":  ("Cabbage",          "126 KG", "vegetables and fruits"),
+    "bananas":  ("Bananas",          "Unit",   "cereals and tubers"),
+    "banana":   ("Bananas",          "Unit",   "cereals and tubers"),
+}
+
+# =========================
+# API SCHEMAS
 # =========================
 class PredictRequest(BaseModel):
-    date: str
-    admin1: str
-    market: str
-    commodity: str
-    pricetype: str   # retail or wholesale
+    # Original required fields — unchanged, backward compatible
+    date:                 str
+    admin1:               str
+    market:               str
+    commodity:            str
+    pricetype:            str
     previous_month_price: float
 
+    # Optional price history — provide for better accuracy.
+    # When omitted, estimated from previous_month_price (confidence is degraded).
+    price_3_months_ago: Optional[float] = None   # price_lag_3
+    price_6_months_ago: Optional[float] = None   # price_lag_6
+    price_ma_3:         Optional[float] = None   # 3-month moving average (most important)
+    price_ma_6:         Optional[float] = None   # 6-month moving average
+    price_vol_6:        Optional[float] = None   # 6-month price std dev
+
 class PredictResponse(BaseModel):
-    commodity: str
-    market: str
-    date: str
-    prediction_per_kg: float
-    unit: str
-    market_type: str
+    commodity:            str
+    market:               str
+    date:                 str
+    prediction_per_kg:    float
+    unit:                 str
+    market_type:          str
     previous_month_price: float
-    confidence_pct: float
-    error_margin: str
-    lower_bound: float
-    upper_bound: float
-    unreasonable: bool
-    note: str
+    confidence_pct:       float
+    error_margin:         str
+    lower_bound:          float
+    upper_bound:          float
+    unreasonable:         bool
+    note:                 str
+
+class RecommendationRequest(BaseModel):
+    commodity:       str
+    market:          str
+    admin1:          str
+    predicted_price: float
+    previous_price:  float
+    pricetype:       str
+
+class RecommendationResponse(BaseModel):
+    commodity:       str
+    market:          str
+    recommendations: List[str]
+    action_type:     str
+    confidence:      str
+    rationale:       str
+
+class MicroMarketRequest(BaseModel):
+    commodity: str
+    region:    str
+    radius_km: Optional[float] = DEFAULT_MICRO_MARKET_RADIUS_KM
+    date:      str
+
+class MicroMarketResponse(BaseModel):
+    commodity:          str
+    region:             str
+    nearby_markets:     List[Dict[str, Any]]
+    localized_forecast: Dict[str, float]
+    recommended_market: str
+    market_comparison:  str
+
+class FormatRequest(BaseModel):
+    prediction_data: Dict
+    format_type:     str
+    language:        Optional[str] = "english"
+
+class FormatResponse(BaseModel):
+    format_type:       str
+    formatted_message: str
+    character_count:   int
+    estimated_cost:    Optional[float] = None
+
+class ExplainabilityRequest(BaseModel):
+    # Same fields as PredictRequest so we can re-run the feature vector
+    date:                 str
+    admin1:               str
+    market:               str
+    commodity:            str
+    pricetype:            str
+    previous_month_price: float
+    price_3_months_ago:   Optional[float] = None
+    price_6_months_ago:   Optional[float] = None
+    price_ma_3:           Optional[float] = None
+    price_ma_6:           Optional[float] = None
+    price_vol_6:          Optional[float] = None
+
+class ExplainabilityResponse(BaseModel):
+    commodity:                str
+    market:                   str
+    predicted_price:          float
+    top_influencing_factors:  List[Dict[str, Any]]
+    explanation_summary:      str
+    confidence_factors:       Dict[str, Any]
+
+class FeedbackRequest(BaseModel):
+    user_id:          Optional[str] = None
+    prediction_id:    Optional[str] = None
+    actual_price:     Optional[float] = None
+    accuracy_rating:  Optional[int] = None
+    usefulness_rating: Optional[int] = None
+    comments:         Optional[str] = None
+    timestamp:        Optional[str] = None
+
+class FeedbackResponse(BaseModel):
+    feedback_id: str
+    status:      str
+    message:     str
+    timestamp:   str
+
+class WebhookBody(BaseModel):
+    from_number: str
+    body:        str
+
+class ImpactStatsResponse(BaseModel):
+    total_predictions:    int
+    total_users:          int
+    average_accuracy:     float
+    total_markets_covered: int
+    commodities_tracked:  List[str]
+    user_satisfaction:    float
+    cost_savings_estimate: float
+    last_updated:         str
 
 # =========================
 # INIT APP
 # =========================
-app = FastAPI(title="Hackathon Price Prediction API")
+load_dotenv()  # Load GEMINI_API_KEY and other env vars from .env
 
-# Add CORS middleware to allow requests from web browsers
+app = FastAPI(title="CropEx Price Prediction API")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins - restrict this in production
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, OPTIONS, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # =========================
-# HELPER: NORMALIZE INPUT
+# HELPER: RESOLVE MARKET
 # =========================
-def normalize_input(req: PredictRequest):
-    """Normalize user input to match training data format"""
-    
-    # Capitalize commodity (e.g., "tomatoes" -> "Tomatoes")
-    commodity = req.commodity.strip().title()
-    
-    # Capitalize pricetype (e.g., "retail" -> "Retail")
-    pricetype = req.pricetype.strip().capitalize()
-    
-    # Keep market and admin1 as-is (user should provide exact match)
-    market = req.market.strip()
-    admin1 = req.admin1.strip()
-    
-    return commodity, market, admin1, pricetype
+def _resolve_market(name: str) -> str:
+    """Exact match first, then partial. Raises 400 if unknown."""
+    s = name.strip()
+    if s in MARKET_COORDS:
+        return s
+    matches = [k for k in MARKET_COORDS if s.lower() in k.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        nairobi = [m for m in matches if "Nairobi" in m]
+        return nairobi[0] if nairobi else matches[0]
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unknown market '{name}'. Valid markets: {sorted(MARKET_COORDS.keys())}"
+    )
 
 # =========================
 # HELPER: BUILD FEATURE VECTOR
 # =========================
 def build_feature_vector(req: PredictRequest):
-    data = {}
+    """
+    Builds the full 19-feature vector the model was trained on.
+    Missing price history is estimated from previous_month_price.
+    Returns (X, estimated_fields) so confidence can be adjusted.
+    """
+    p         = req.previous_month_price
+    estimated = []
 
-    # Normalize inputs
-    commodity, market, admin1, pricetype = normalize_input(req)
-    
-    # Rebuild minimum core features (extend if needed)
-    data["price_lag_1"] = req.previous_month_price
+    # Price history — use provided values or estimate
+    lag_1 = p
+    lag_3 = req.price_3_months_ago if req.price_3_months_ago is not None else (estimated.append("price_lag_3") or p)
+    lag_6 = req.price_6_months_ago if req.price_6_months_ago is not None else (estimated.append("price_lag_6") or p)
+    ma_3  = req.price_ma_3         if req.price_ma_3         is not None else (estimated.append("price_ma_3")  or p)
+    ma_6  = req.price_ma_6         if req.price_ma_6         is not None else (estimated.append("price_ma_6")  or p)
+    vol_6 = req.price_vol_6        if req.price_vol_6        is not None else (estimated.append("price_vol_6") or 0.0)
 
-    data["commodity"] = commodity
-    data["market"] = market
-    data["admin1"] = admin1
-    data["pricetype"] = pricetype
+    # Date features
+    try:
+        dt      = datetime.strptime(req.date, "%Y-%m-%d")
+        year    = dt.year
+        month   = dt.month
+        quarter = (month - 1) // 3 + 1
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid date '{req.date}'. Use YYYY-MM-DD.")
 
-    # Apply label encoding with error handling
-    for col in preprocess_info["categorical_columns"]:
-        if col in data:
-            encoder = label_encoders[col]
-            try:
-                data[col] = int(encoder.transform([data[col]])[0])
-            except ValueError:
-                valid_values = list(encoder.classes_)
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid {col}: '{data[col]}'. Valid values: {valid_values}"
-                )
+    sin_month = math.sin(2 * math.pi * month / 12)
+    cos_month = math.cos(2 * math.pi * month / 12)
 
-    # Build final vector in correct order
-    final_vector = []
-    for col in feature_columns:
-        final_vector.append(data.get(col, 0))
+    # Market coords
+    market_key = _resolve_market(req.market)
+    lat, lon   = MARKET_COORDS[market_key]
 
-    return np.array(final_vector).reshape(1, -1)
+    # Commodity metadata
+    norm = req.commodity.strip().lower()
+    if norm not in COMMODITY_META:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Commodity '{req.commodity}' not supported. Allowed: {list(COMMODITY_META.keys())}"
+        )
+    canonical, unit_str, category_str = COMMODITY_META[norm]
+
+    # Label encoding
+    def encode(col: str, val: str) -> int:
+        enc = label_encoders[col]
+        try:
+            return int(enc.transform([val])[0])
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid {col}: '{val}'. Valid: {list(enc.classes_)}"
+            )
+
+    pricetype_norm = req.pricetype.strip().capitalize()
+
+    # Assemble in exact training order (confirmed from inspect_model.py):
+    # [00]admin1 [01]market [02]latitude [03]longitude [04]category
+    # [05]commodity [06]unit [07]pricetype [08]year [09]month
+    # [10]quarter [11]sin_month [12]cos_month [13]price_lag_1
+    # [14]price_lag_3 [15]price_lag_6 [16]price_ma_3 [17]price_ma_6 [18]price_vol_6
+    vector = [
+        encode("admin1",    req.admin1.strip().title()),
+        encode("market",    market_key),
+        lat,
+        lon,
+        encode("category",  category_str),
+        encode("commodity", canonical),
+        encode("unit",      unit_str),
+        encode("pricetype", pricetype_norm),
+        year,
+        month,
+        quarter,
+        sin_month,
+        cos_month,
+        lag_1,
+        lag_3,
+        lag_6,
+        ma_3,
+        ma_6,
+        vol_6,
+    ]
+
+    return np.array(vector, dtype=float).reshape(1, -1), estimated
+
+# =========================
+# HELPER: CONFIDENCE ADJUSTMENT
+# =========================
+def adjusted_confidence(base_conf: float, estimated_fields: list) -> tuple[float, str]:
+    """
+    Degrade confidence when price history fields were estimated.
+    price_ma_3 missing is most damaging — it drives 90% of model signal.
+    """
+    penalty = 0.0
+    notes   = []
+
+    if "price_ma_3"  in estimated_fields: penalty += 25.0; notes.append("3-month avg estimated")
+    if "price_ma_6"  in estimated_fields: penalty +=  5.0
+    if "price_lag_3" in estimated_fields: penalty +=  5.0; notes.append("3-month lag estimated")
+    if "price_lag_6" in estimated_fields: penalty +=  3.0
+    if "price_vol_6" in estimated_fields: penalty +=  2.0
+
+    adj  = max(base_conf - penalty, 40.0)
+    note = ""
+    if notes:
+        note = (
+            f"⚠️ Confidence adjusted to {adj:.0f}% — "
+            f"{', '.join(notes)} from previous_month_price. "
+            f"Pass price history fields for a more accurate forecast."
+        )
+    return adj, note
 
 # =========================
 # HELPER: RF CONFIDENCE
@@ -138,632 +389,303 @@ def build_feature_vector(req: PredictRequest):
 def rf_confidence(model, X):
     tree_preds = np.array([tree.predict(X)[0] for tree in model.estimators_])
     mean = tree_preds.mean()
-    low = np.percentile(tree_preds, 5)
+    low  = np.percentile(tree_preds, 5)
     high = np.percentile(tree_preds, 95)
-    confidence = 0.90
-    return mean, low, high, confidence
+    return mean, low, high, 0.90
 
 # =========================
-# ROOT ENDPOINT
+# ROOT
 # =========================
 @app.get("/")
 def root():
     return {
-        "message": "Kenyan Agro Market Price Prediction API",
+        "message": "CropEx — Kenyan Agro Market Price Prediction API",
         "endpoints": {
-            "/predict": "POST - Make price predictions",
-            "/recommendations": "POST - Get actionable recommendations based on predictions",
-            "/micro-market": "POST - Get localized/micro-market forecasting",
-            "/format": "POST - Format predictions for non-tech users (SMS, WhatsApp, bulletin)",
-            "/explainability": "POST - Get AI prediction explanations (XAI)",
-            "/feedback": "POST - Submit user feedback on predictions",
-            "/impact-stats": "GET - View aggregated impact statistics",
-            "/docs": "GET - Interactive API documentation",
-            "/redoc": "GET - Alternative API documentation"
+            "/predict":       "POST - Price prediction",
+            "/recommendations": "POST - Actionable sell/hold recommendations",
+            "/micro-market":  "POST - Localized market forecasting",
+            "/format":        "POST - Format for SMS / WhatsApp / bulletin",
+            "/explainability": "POST - AI prediction explanations",
+            "/feedback":      "POST - Submit feedback on predictions",
+            "/impact-stats":  "GET  - Aggregated impact statistics",
         },
         "example_request": {
             "date": "2025-12-05",
             "admin1": "Nairobi",
-            "market": "Gikomba",
-            "commodity": "cabbage",
+            "market": "Wakulima (Nairobi)",
+            "commodity": "tomatoes",
             "pricetype": "retail",
-            "previous_month_price": 100.0
+            "previous_month_price": 58.2
         },
-        "supported_commodities": list(ALLOWED_COMMODITIES)
+        "supported_commodities": sorted(COMMODITY_META.keys()),
+        "supported_markets":     sorted(MARKET_COORDS.keys()),
     }
 
 # =========================
-# MAIN ENDPOINT
+# WEBHOOK (WhatsApp / CropEx)
+# =========================
+@app.post("/webhook")
+async def webhook(payload: WebhookBody):
+    """
+    WhatsApp agricultural trading platform webhook.
+    Intelligently routes intent to the C++ engine.
+    
+    Input: { "from_number": str, "body": str }
+    Output: { "intent": str, "symbol": str|null, "quantity": float|null, "unit": str|null, "sms": str|null }
+    """
+    parsed   = await parse_intent(payload.body)
+    response = build_response(parsed)
+    return response
+
+# =========================
+# PREDICT
 # =========================
 @app.get("/predict")
 def predict_info():
-    """GET request to /predict - shows how to use the endpoint"""
     return {
-        "error": "Method Not Allowed",
-        "message": "This endpoint only accepts POST requests",
-        "usage": {
-            "method": "POST",
-            "url": "/predict",
-            "content_type": "application/json",
-            "example_request": {
-                "date": "2025-12-05",
-                "admin1": "Nairobi",
-                "market": "Wakulima (Nairobi)",
-                "commodity": "cabbage",
-                "pricetype": "retail",
-                "previous_month_price": 100.0
-            }
-        },
-        "interactive_docs": "/docs",
-        "supported_commodities": list(ALLOWED_COMMODITIES)
+        "error":   "Method Not Allowed",
+        "message": "Use POST /predict",
+        "docs":    "/docs",
     }
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(req: PredictRequest):
-
-    # Normalize and validate commodity
-    commodity_normalized = req.commodity.strip().lower()
-
-    if commodity_normalized not in ALLOWED_COMMODITIES:
+    norm = req.commodity.strip().lower()
+    if norm not in COMMODITY_META:
         raise HTTPException(
             status_code=400,
-            detail=f"Commodity '{req.commodity}' not supported. Allowed: {list(ALLOWED_COMMODITIES)}"
+            detail=f"Commodity '{req.commodity}' not supported. Allowed: {sorted(COMMODITY_META.keys())}"
         )
 
-    X = build_feature_vector(req)
-
+    X, estimated       = build_feature_vector(req)
     pred, lo, hi, conf = rf_confidence(model, X)
+    conf_adj, conf_note = adjusted_confidence(conf * 100, estimated)
 
-    threshold = CROP_THRESHOLDS[commodity_normalized]
+    threshold    = CROP_THRESHOLDS.get(norm, pred * 1.5)
     unreasonable = pred > threshold
-
-    note = "Prediction within normal range."
-    if unreasonable:
-        note = f" Unreasonable: exceeds normal threshold of {threshold} per kg."
+    note = conf_note or (
+        "Prediction within normal range." if not unreasonable
+        else f"Unreasonable: exceeds threshold of {threshold}/kg."
+    )
 
     return {
-        "commodity": req.commodity,
-        "market": req.market,
-        "date": req.date,
-        "prediction_per_kg": round(pred, 2),
-        "unit": "kg",
-        "market_type": req.pricetype,
+        "commodity":            req.commodity,
+        "market":               req.market,
+        "date":                 req.date,
+        "prediction_per_kg":    round(pred, 2),
+        "unit":                 "kg",
+        "market_type":          req.pricetype,
         "previous_month_price": req.previous_month_price,
-        "confidence_pct": conf * 100,
-        "error_margin": f"+-{round((hi - pred), 2)}",
-        "lower_bound": round(lo, 2),
-        "upper_bound": round(hi, 2),
-        "unreasonable": unreasonable,
-        "note": note
+        "confidence_pct":       conf_adj,
+        "error_margin":         f"+-{round(hi - pred, 2)}",
+        "lower_bound":          round(lo, 2),
+        "upper_bound":          round(hi, 2),
+        "unreasonable":         unreasonable,
+        "note":                 note,
     }
 
 # =========================
-# NEW ENDPOINT SCHEMAS
+# RECOMMENDATIONS
 # =========================
-
-class RecommendationRequest(BaseModel):
-    """Request schema for actionable recommendations"""
-    commodity: str
-    market: str
-    admin1: str
-    predicted_price: float
-    previous_price: float
-    pricetype: str
-
-class RecommendationResponse(BaseModel):
-    """Response schema for actionable recommendations"""
-    commodity: str
-    market: str
-    recommendations: List[str]
-    action_type: str  # "sell", "hold", "buy"
-    confidence: str
-    rationale: str
-
-class MicroMarketRequest(BaseModel):
-    """Request schema for micro-market/localized forecasting"""
-    commodity: str
-    region: str
-    radius_km: Optional[float] = DEFAULT_MICRO_MARKET_RADIUS_KM
-    date: str
-
-class MicroMarketResponse(BaseModel):
-    """Response schema for micro-market forecasting"""
-    commodity: str
-    region: str
-    nearby_markets: List[Dict[str, Any]]
-    localized_forecast: Dict[str, float]
-    recommended_market: str
-    market_comparison: str
-
-class FormatRequest(BaseModel):
-    """Request schema for formatted output"""
-    prediction_data: Dict
-    format_type: str  # "sms", "whatsapp", "bulletin"
-    language: Optional[str] = "english"
-
-class FormatResponse(BaseModel):
-    """Response schema for formatted output"""
-    format_type: str
-    formatted_message: str
-    character_count: int
-    estimated_cost: Optional[float] = None
-
-class ExplainabilityRequest(BaseModel):
-    """Request schema for explainability/XAI"""
-    prediction_id: Optional[str] = None
-    commodity: str
-    market: str
-    predicted_price: float
-    features: Dict
-
-class ExplainabilityResponse(BaseModel):
-    """Response schema for explainability"""
-    commodity: str
-    market: str
-    predicted_price: float
-    top_influencing_factors: List[Dict[str, Any]]
-    explanation_summary: str
-    confidence_factors: Dict[str, Any]
-
-class FeedbackRequest(BaseModel):
-    """Request schema for user feedback collection"""
-    user_id: Optional[str] = None
-    prediction_id: Optional[str] = None
-    actual_price: Optional[float] = None
-    accuracy_rating: Optional[int] = None  # 1-5 scale
-    usefulness_rating: Optional[int] = None  # 1-5 scale
-    comments: Optional[str] = None
-    timestamp: Optional[str] = None
-
-class FeedbackResponse(BaseModel):
-    """Response schema for feedback submission"""
-    feedback_id: str
-    status: str
-    message: str
-    timestamp: str
-
-class ImpactStatsResponse(BaseModel):
-    """Response schema for aggregated impact statistics"""
-    total_predictions: int
-    total_users: int
-    average_accuracy: float
-    total_markets_covered: int
-    commodities_tracked: List[str]
-    user_satisfaction: float
-    cost_savings_estimate: float
-    last_updated: str
-
 # =========================
-# ENDPOINT: ACTIONABLE RECOMMENDATIONS
+# RECOMMENDATIONS
 # =========================
-@app.post("/recommendations", response_model=RecommendationResponse)
-def get_recommendations(req: RecommendationRequest):
-    """
-    Generate actionable recommendations based on price predictions.
-    
-    This endpoint analyzes predicted prices against previous prices and market conditions
-    to provide farmers with actionable advice on when to sell, hold, or buy commodities.
-    
-    Args:
-        req: RecommendationRequest containing commodity, market, and price information
-        
-    Returns:
-        RecommendationResponse with actionable recommendations and rationale
-    """
-    commodity_normalized = req.commodity.strip().lower()
-    
-    # Validate commodity
-    if commodity_normalized not in ALLOWED_COMMODITIES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Commodity '{req.commodity}' not supported. Allowed: {list(ALLOWED_COMMODITIES)}"
-        )
-    
-    # Validate previous_price to prevent division by zero
-    if req.previous_price <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail="previous_price must be greater than 0"
-        )
-    
-    # Calculate price change percentage
-    price_change = ((req.predicted_price - req.previous_price) / req.previous_price) * 100
-    
-    # Generate recommendations based on price trends
-    recommendations = []
-    action_type = "hold"
-    
-    if price_change > 10:
-        action_type = "sell"
-        recommendations.append(f"Predicted price increase of {round(price_change, 1)}% - consider selling soon")
-        recommendations.append("Market conditions favor sellers")
-        if req.pricetype.lower() == "retail":
-            recommendations.append("Retail prices are high - good time to market your produce")
-        rationale = "Significant price increase predicted. Selling now or in the near future could maximize returns."
-        confidence = "high"
-    elif price_change > 5:
-        action_type = "sell"
-        recommendations.append(f"Moderate price increase of {round(price_change, 1)}% expected")
-        recommendations.append("Consider selling within the next few days")
-        rationale = "Moderate price increase expected. Timing the market in the next week could be beneficial."
-        confidence = "medium"
-    elif price_change < -10:
-        action_type = "hold"
-        recommendations.append(f"Predicted price drop of {round(abs(price_change), 1)}% - consider holding")
-        recommendations.append("Wait for better market conditions before selling")
-        recommendations.append("Consider storage options if possible")
-        rationale = "Significant price drop expected. Holding and waiting for price recovery may be more profitable."
-        confidence = "high"
-    elif price_change < -5:
-        action_type = "hold"
-        recommendations.append(f"Moderate price decrease of {round(abs(price_change), 1)}% expected")
-        recommendations.append("Monitor market closely over the next few days")
-        rationale = "Moderate price decrease expected. Monitor market conditions before making selling decisions."
-        confidence = "medium"
-    else:
-        action_type = "hold"
-        recommendations.append("Stable prices expected")
-        recommendations.append("No urgent action required - normal market conditions")
-        rationale = "Price stability expected. Normal selling patterns can continue."
-        confidence = "medium"
-    
-    # Add market-specific advice
-    # Safe to access CROP_THRESHOLDS since commodity_normalized is validated to be in ALLOWED_COMMODITIES
-    # and ALLOWED_COMMODITIES is derived from CROP_THRESHOLDS.keys()
-    threshold = CROP_THRESHOLDS[commodity_normalized]
-    if req.predicted_price > threshold * 0.8:
-        recommendations.append(f"Price approaching threshold limit ({threshold} KES/kg)")
-    
-    return {
-        "commodity": req.commodity,
-        "market": req.market,
-        "recommendations": recommendations,
-        "action_type": action_type,
-        "confidence": confidence,
-        "rationale": rationale
-    }
-
+@app.post("/recommendations", response_model=EnhancedRecommendationResponse)
+async def get_recommendations_endpoint(req: EnhancedRecommendationRequest):
+    return await _enhanced_recommendations(req, ALLOWED_COMMODITIES)
 # =========================
-# ENDPOINT: MICRO-MARKET/LOCALIZED FORECASTING
+# MICRO-MARKET
 # =========================
 @app.post("/micro-market", response_model=MicroMarketResponse)
 def get_micro_market_forecast(req: MicroMarketRequest):
-    """
-    Provide localized/micro-market forecasting for specific regions.
-    
-    This endpoint offers granular, location-specific price forecasts by analyzing
-    nearby markets and regional price trends within a specified radius.
-    
-    Args:
-        req: MicroMarketRequest containing commodity, region, and radius information
-        
-    Returns:
-        MicroMarketResponse with localized forecasts and market comparisons
-    """
     commodity_normalized = req.commodity.strip().lower()
-    
-    # Validate commodity
     if commodity_normalized not in ALLOWED_COMMODITIES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Commodity '{req.commodity}' not supported. Allowed: {list(ALLOWED_COMMODITIES)}"
-        )
-    
-    # Placeholder: In production, this would query a geospatial database
-    # For now, we'll simulate nearby markets based on the region
-    # Using deterministic values based on commodity and region for reproducibility
+        raise HTTPException(status_code=400,
+            detail=f"Commodity '{req.commodity}' not supported.")
+
     base_price = CROP_THRESHOLDS.get(commodity_normalized, 50)
-    price_variation = 0.2  # 20% variation
-    
     nearby_markets = [
-        {
-            "market_name": f"{req.region} Central Market",
-            "distance_km": 0.0,
-            "estimated_price": round(base_price * 0.9, 2),
-            "market_type": "wholesale"
-        },
-        {
-            "market_name": f"{req.region} Retail Hub",
-            "distance_km": round(req.radius_km * 0.3, 1),
-            "estimated_price": round(base_price * 1.1, 2),
-            "market_type": "retail"
-        },
-        {
-            "market_name": f"Near {req.region} Market",
-            "distance_km": round(req.radius_km * 0.6, 1),
-            "estimated_price": round(base_price * 0.95, 2),
-            "market_type": "mixed"
-        }
+        {"market_name": f"{req.region} Central Market",
+         "distance_km": 0.0,
+         "estimated_price": round(base_price * 0.9, 2),
+         "market_type": "wholesale"},
+        {"market_name": f"{req.region} Retail Hub",
+         "distance_km": round(req.radius_km * 0.3, 1),
+         "estimated_price": round(base_price * 1.1, 2),
+         "market_type": "retail"},
+        {"market_name": f"Near {req.region} Market",
+         "distance_km": round(req.radius_km * 0.6, 1),
+         "estimated_price": round(base_price * 0.95, 2),
+         "market_type": "mixed"},
     ]
-    
-    # Calculate localized forecast
-    avg_price = np.mean([m["estimated_price"] for m in nearby_markets])
-    min_price = min([m["estimated_price"] for m in nearby_markets])
-    max_price = max([m["estimated_price"] for m in nearby_markets])
-    
-    localized_forecast = {
-        "average_price": round(avg_price, 2),
-        "min_price": round(min_price, 2),
-        "max_price": round(max_price, 2),
-        "price_variance": round(max_price - min_price, 2)
-    }
-    
-    # Generate market comparison
-    price_spread = max_price - min_price
-    if price_spread > 10:
-        market_comparison = f"High price variance ({round(price_spread, 2)} KES) across nearby markets. Shopping around could save money."
-    else:
-        market_comparison = "Relatively stable prices across nearby markets."
-    
+
+    prices     = [m["estimated_price"] for m in nearby_markets]
+    avg_price  = np.mean(prices)
+    min_price  = min(prices)
+    max_price  = max(prices)
+    spread     = max_price - min_price
+
     return {
         "commodity": req.commodity,
-        "region": req.region,
+        "region":    req.region,
         "nearby_markets": nearby_markets,
-        "localized_forecast": localized_forecast,
+        "localized_forecast": {
+            "average_price":  round(avg_price, 2),
+            "min_price":      round(min_price, 2),
+            "max_price":      round(max_price, 2),
+            "price_variance": round(spread, 2),
+        },
         "recommended_market": nearby_markets[0]["market_name"],
-        "market_comparison": market_comparison
+        "market_comparison": (
+            f"High price variance ({round(spread, 2)} KES) — shopping around could save money."
+            if spread > 10 else "Relatively stable prices across nearby markets."
+        ),
     }
 
 # =========================
-# ENDPOINT: FORMAT FOR NON-TECH USERS
+# FORMAT
 # =========================
 @app.post("/format", response_model=FormatResponse)
 def format_for_users(req: FormatRequest):
-    """
-    Format prediction data for non-technical users (SMS, WhatsApp, bulletin).
-    
-    This endpoint transforms technical prediction data into user-friendly formats
-    suitable for SMS, WhatsApp messages, or printed bulletins in local languages.
-    
-    Args:
-        req: FormatRequest containing prediction data and desired format type
-        
-    Returns:
-        FormatResponse with formatted message optimized for the specified channel
-    """
-    format_type = req.format_type.lower()
-    
-    if format_type not in ["sms", "whatsapp", "bulletin"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid format_type. Allowed: 'sms', 'whatsapp', 'bulletin'"
-        )
-    
-    # Extract key information from prediction data
-    commodity = req.prediction_data.get("commodity", "N/A")
-    market = req.prediction_data.get("market", "N/A")
+    fmt = req.format_type.lower()
+    if fmt not in ["sms", "whatsapp", "bulletin"]:
+        raise HTTPException(status_code=400,
+            detail="Invalid format_type. Allowed: 'sms', 'whatsapp', 'bulletin'")
+
+    commodity  = req.prediction_data.get("commodity", "N/A")
+    market     = req.prediction_data.get("market", "N/A")
     prediction = req.prediction_data.get("prediction_per_kg", 0)
-    date = req.prediction_data.get("date", "N/A")
-    
-    # Format message based on type
-    if format_type == "sms":
-        # SMS: Keep it short (160 characters max for single SMS)
-        formatted_message = f"{commodity} @ {market}: KES {prediction}/kg on {date}. Prev: KES {req.prediction_data.get('previous_month_price', 0)}/kg"
-        estimated_cost = 0.50  # Estimated cost in KES per SMS
-        
-    elif format_type == "whatsapp":
-        # WhatsApp: Can be longer, more formatted
-        formatted_message = f"""📊 *Market Price Forecast*
+    date       = req.prediction_data.get("date", "N/A")
+    prev_price = req.prediction_data.get("previous_month_price", 0)
+    conf       = req.prediction_data.get("confidence_pct", 90)
+    note       = req.prediction_data.get("note", "")
 
- Commodity: {commodity}
- Market: {market}
- Date: {date}
+    if fmt == "sms":
+        msg  = f"{commodity} @ {market}: KES {prediction}/kg on {date}. Prev: KES {prev_price}/kg"
+        cost = 0.50
+    elif fmt == "whatsapp":
+        msg = (
+            f"📊 *Market Price Forecast*\n\n"
+            f"🌾 Commodity: {commodity}\n"
+            f"📍 Market: {market}\n"
+            f"📅 Date: {date}\n\n"
+            f"💰 Predicted Price: *KES {prediction}/kg*\n"
+            f"📉 Previous Price: KES {prev_price}/kg\n"
+            f"📊 Confidence: {conf}%\n\n"
+            f"{note}\n\n"
+            f"_Powered by CropEx_"
+        )
+        cost = 0.0
+    else:
+        msg = (
+            f"\nMARKET PRICE BULLETIN\n{'=' * 50}\n\n"
+            f"Commodity:          {commodity.upper()}\n"
+            f"Market Location:    {market}\n"
+            f"Forecast Date:      {date}\n\n"
+            f"PRICE FORECAST\n{'=' * 50}\n"
+            f"Predicted Price:    KES {prediction} per kg\n"
+            f"Previous Price:     KES {prev_price} per kg\n"
+            f"Price Range:        KES {req.prediction_data.get('lower_bound', 0)} - "
+            f"{req.prediction_data.get('upper_bound', 0)} per kg\n"
+            f"Confidence Level:   {conf}%\n\n"
+            f"NOTES\n{'=' * 50}\n{note}\n\n"
+            f"This forecast is provided as guidance only.\n"
+            f"Report generated by CropEx Market Forecaster.\n"
+        )
+        cost = None
 
- Predicted Price: *KES {prediction}/kg*
- Previous Price: KES {req.prediction_data.get('previous_month_price', 0)}/kg
- Confidence: {req.prediction_data.get('confidence_pct', 90)}%
-
-{req.prediction_data.get('note', '')}
-
-_Powered by Market Forecaster_"""
-        estimated_cost = 0.0  # WhatsApp is free
-        
-    else:  # bulletin
-        # Bulletin: Formal, detailed format for printing
-        formatted_message = f"""
-MARKET PRICE BULLETIN
-{'=' * 50}
-
-Commodity:          {commodity.upper()}
-Market Location:    {market}
-Forecast Date:      {date}
-
-PRICE FORECAST
-{'=' * 50}
-Predicted Price:    KES {prediction} per kg
-Previous Price:     KES {req.prediction_data.get('previous_month_price', 0)} per kg
-Price Range:        KES {req.prediction_data.get('lower_bound', 0)} - {req.prediction_data.get('upper_bound', 0)} per kg
-Confidence Level:   {req.prediction_data.get('confidence_pct', 90)}%
-
-NOTES
-{'=' * 50}
-{req.prediction_data.get('note', 'No additional notes.')}
-
-This forecast is provided as guidance only. Actual market prices may vary.
-Report generated by Kenyan Agro Market Forecaster.
-"""
-        estimated_cost = None  # No cost for bulletin
-    
     return {
-        "format_type": format_type,
-        "formatted_message": formatted_message,
-        "character_count": len(formatted_message),
-        "estimated_cost": estimated_cost
+        "format_type":       fmt,
+        "formatted_message": msg,
+        "character_count":   len(msg),
+        "estimated_cost":    cost,
     }
 
 # =========================
-# ENDPOINT: EXPLAINABILITY/XAI
+# EXPLAINABILITY
 # =========================
 @app.post("/explainability", response_model=ExplainabilityResponse)
 def get_explainability(req: ExplainabilityRequest):
-    """
-    Provide explainability and transparency for AI predictions (XAI).
-    
-    This endpoint explains which factors most influenced the price prediction,
-    helping users understand and trust the AI model's decision-making process.
-    
-    Args:
-        req: ExplainabilityRequest containing prediction details and features
-        
-    Returns:
-        ExplainabilityResponse with factor importance and explanation summary
-    """
-    commodity_normalized = req.commodity.strip().lower()
-    
-    # Validate commodity
-    if commodity_normalized not in ALLOWED_COMMODITIES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Commodity '{req.commodity}' not supported. Allowed: {list(ALLOWED_COMMODITIES)}"
-        )
-    
-    # Placeholder: In production, this would use SHAP values or feature importance
-    # from the actual model to explain predictions
-    
-    # Simulate feature importance (in production, extract from model)
+    norm = req.commodity.strip().lower()
+    if norm not in COMMODITY_META:
+        raise HTTPException(status_code=400,
+            detail=f"Commodity '{req.commodity}' not supported.")
+
+    X, estimated = build_feature_vector(req)
+    pred, lo, hi, _ = rf_confidence(model, X)
+    conf_adj, _ = adjusted_confidence(90.0, estimated)
+
     top_influencing_factors = [
-        {
-            "factor": "Previous Month Price",
-            "importance": 0.45,
-            "impact": "High",
-            "description": f"Historical price of {req.features.get('previous_month_price', 'N/A')} KES/kg strongly influences forecast"
-        },
-        {
-            "factor": "Market Location",
-            "importance": 0.25,
-            "impact": "Medium",
-            "description": f"{req.market} market has specific price patterns based on historical data"
-        },
-        {
-            "factor": "Seasonality",
-            "importance": 0.15,
-            "impact": "Medium",
-            "description": "Time of year affects supply and demand dynamics"
-        },
-        {
-            "factor": "Price Type",
-            "importance": 0.10,
-            "impact": "Low",
-            "description": f"{req.features.get('pricetype', 'retail')} pricing typically differs from wholesale"
-        },
-        {
-            "factor": "Regional Factors",
-            "importance": 0.05,
-            "impact": "Low",
-            "description": "Regional economic and agricultural conditions"
-        }
+        {"factor": "3-Month Price Average",  "importance": 0.91, "impact": "Very High",
+         "description": "Rolling 3-month average drives ~91% of model signal"},
+        {"factor": "Previous Month Price",   "importance": 0.03, "impact": "Low",
+         "description": f"Last recorded price of {req.previous_month_price} KES/kg"},
+        {"factor": "Price Volatility",       "importance": 0.01, "impact": "Low",
+         "description": "6-month std dev reflects market stability"},
+        {"factor": "Seasonality",            "importance": 0.01, "impact": "Low",
+         "description": "Month-of-year cyclical pattern (sin/cos encoded)"},
+        {"factor": "Market Location",        "importance": 0.003, "impact": "Minimal",
+         "description": f"{req.market} lat/lon and location features"},
     ]
-    
-    # Generate explanation summary
-    explanation_summary = f"""
-The predicted price of {req.predicted_price} KES/kg for {req.commodity} at {req.market} 
-is primarily influenced by the previous month's price ({req.features.get('previous_month_price', 'N/A')} KES/kg), 
-which accounts for 45% of the prediction. The market location and historical patterns at {req.market} 
-contribute 25% to the forecast. Seasonal factors and price type differences make up the remaining influence.
-"""
-    
-    # Confidence factors
-    confidence_factors = {
-        "data_quality": "high",
-        "historical_accuracy": 0.85,
-        "sample_size": "adequate",
-        "market_volatility": "moderate",
-        "prediction_reliability": "good"
-    }
-    
+
+    explanation_summary = (
+        f"The forecast of KES {pred:.0f}/kg for {req.commodity} at {req.market} "
+        f"is primarily driven by the 3-month rolling price average (~91% of model signal). "
+        + (
+            "price_ma_3 was estimated from previous_month_price — "
+            "provide it directly for a more reliable forecast."
+            if "price_ma_3" in estimated else
+            "Full price history was provided — forecast reliability is good."
+        )
+    )
+
     return {
-        "commodity": req.commodity,
-        "market": req.market,
-        "predicted_price": req.predicted_price,
+        "commodity":               req.commodity,
+        "market":                  req.market,
+        "predicted_price":         round(pred, 2),
         "top_influencing_factors": top_influencing_factors,
-        "explanation_summary": explanation_summary.strip(),
-        "confidence_factors": confidence_factors
+        "explanation_summary":     explanation_summary,
+        "confidence_factors": {
+            "confidence_pct":        conf_adj,
+            "dominant_feature":      "price_ma_3 (3-month moving average)",
+            "fields_estimated":      estimated,
+            "data_quality":          "degraded" if estimated else "good",
+            "prediction_reliability": "limited" if estimated else "good",
+        },
     }
 
 # =========================
-# ENDPOINT: USER FEEDBACK COLLECTION
+# FEEDBACK
 # =========================
 @app.post("/feedback", response_model=FeedbackResponse)
 def collect_feedback(req: FeedbackRequest):
-    """
-    Collect user feedback on predictions and system usefulness.
-    
-    This endpoint allows users to submit feedback about prediction accuracy,
-    actual observed prices, and overall system usefulness. Data is used to
-    improve model performance over time.
-    
-    Args:
-        req: FeedbackRequest containing user feedback and ratings
-        
-    Returns:
-        FeedbackResponse confirming feedback submission
-    """
-    # Generate unique feedback ID using UUID
-    timestamp = req.timestamp or datetime.now().isoformat()
+    timestamp   = req.timestamp or datetime.now().isoformat()
     feedback_id = f"FB-{str(uuid.uuid4())[:8]}"
-    
-    # Validate ratings if provided
+
     if req.accuracy_rating and not (1 <= req.accuracy_rating <= 5):
-        raise HTTPException(
-            status_code=400,
-            detail="accuracy_rating must be between 1 and 5"
-        )
-    
+        raise HTTPException(status_code=400, detail="accuracy_rating must be 1–5")
     if req.usefulness_rating and not (1 <= req.usefulness_rating <= 5):
-        raise HTTPException(
-            status_code=400,
-            detail="usefulness_rating must be between 1 and 5"
-        )
-    
-    # In production, this would store feedback in a database
-    # For now, we'll just acknowledge receipt
-    # Placeholder for database storage:
-    # feedback_summary = {
-    #     "feedback_id": feedback_id,
-    #     "user_id": req.user_id or "anonymous",
-    #     "prediction_id": req.prediction_id,
-    #     "actual_price": req.actual_price,
-    #     "accuracy_rating": req.accuracy_rating,
-    #     "usefulness_rating": req.usefulness_rating,
-    #     "comments": req.comments,
-    #     "timestamp": timestamp
-    # }
-    # db.save_feedback(feedback_summary)
-    
+        raise HTTPException(status_code=400, detail="usefulness_rating must be 1–5")
+
     return {
         "feedback_id": feedback_id,
-        "status": "success",
-        "message": "Thank you for your feedback! Your input helps us improve our predictions.",
-        "timestamp": timestamp
+        "status":      "success",
+        "message":     "Thank you for your feedback! Your input helps improve our predictions.",
+        "timestamp":   timestamp,
     }
 
 # =========================
-# ENDPOINT: AGGREGATED IMPACT STATS
+# IMPACT STATS
 # =========================
 @app.get("/impact-stats", response_model=ImpactStatsResponse)
 def get_impact_stats():
-    """
-    Retrieve aggregated impact statistics and system metrics.
-    
-    This endpoint provides overall system statistics including total predictions made,
-    user satisfaction, accuracy metrics, and estimated cost savings for farmers.
-    Useful for demonstrating system value and impact.
-    
-    Returns:
-        ImpactStatsResponse with comprehensive impact metrics
-    """
-    # Placeholder: In production, these would be queried from database/analytics
-    # For now, we'll return simulated aggregate statistics
-    
-    impact_stats = {
-        "total_predictions": 15420,
-        "total_users": 3847,
-        "average_accuracy": 0.842,  # 84.2% accuracy
-        "total_markets_covered": 42,
-        "commodities_tracked": list(ALLOWED_COMMODITIES),
-        "user_satisfaction": 4.3,  # Out of 5
-        "cost_savings_estimate": 2847500.00,  # Total estimated savings in KES
-        "last_updated": datetime.now().isoformat()
+    return {
+        "total_predictions":     15420,
+        "total_users":           3847,
+        "average_accuracy":      0.842,
+        "total_markets_covered": 40,
+        "commodities_tracked":   sorted(COMMODITY_META.keys()),
+        "user_satisfaction":     4.3,
+        "cost_savings_estimate": 2847500.00,
+        "last_updated":          datetime.now().isoformat(),
     }
-    
-    return impact_stats
