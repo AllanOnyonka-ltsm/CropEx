@@ -68,15 +68,15 @@ function detectIntent(msg) {
 // =========================
 // WELCOME + HELP MESSAGES
 // =========================
-const WELCOME_MSG = `👋 *Welcome to CropEx!*
+const WELCOME_MSG = `👋 *Hello, I'm Patrick!*
 
-Kenya's AI-powered crop market intelligence.
+Your personal crop market advisor. I help Kenyan farmers make smarter selling decisions.
 
-You can ask me:
-📊 *Price forecast* — "What is the price of tomatoes?"
+Ask me anything like:
+📊 *Price check* — "What is the price of tomatoes?"
 💡 *Sell advice* — "Should I sell my maize?"
 
-Supported crops:
+Crops I track:
 🌽 Maize (mahindi)
 🍅 Tomatoes (nyanya)
 🥔 Potatoes (viazi)
@@ -84,16 +84,16 @@ Supported crops:
 🌾 Wheat (ngano)
 🫘 Beans (maharagwe)
 
-_Powered by CropEx Market Engine_`;
+_Patrick — Your CropEx Market Advisor_`;
 
-const UNKNOWN_MSG = `❓ I didn't understand that.
+const UNKNOWN_MSG = `❓ *Patrick here!* I didn't quite catch that.
 
-Try asking:
-• "What is the forecast for tomatoes?"
-• "Should I sell my maize?"
-• "Bei ya viazi ni ngapi?"
+Try asking me something like:
+- "What is the forecast for tomatoes?"
+- "Should I sell my maize?"
+- "Bei ya viazi ni ngapi?"
 
-Type *hi* to see the full menu.`;
+Type *hi* to see everything I can do.`;
 
 // =========================
 // PYTHON API HELPERS
