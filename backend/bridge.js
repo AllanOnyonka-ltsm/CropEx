@@ -120,6 +120,30 @@ async function sendWhatsApp(to, body) {
 }
 
 // =========================
+// TIME TRAVEL PARSER
+// =========================
+function extractTargetDate(msg) {
+    const lower = msg.toLowerCase();
+    const target = new Date();
+    
+    let daysToAdd = 30; // Default to 1 month (30 days) if no time is specified
+
+    // Detect NLP timeframes
+    if (lower.includes('next week') || lower.includes('1 week')) daysToAdd = 7;
+    else if (lower.includes('2 weeks')) daysToAdd = 14;
+    else if (lower.includes('3 weeks')) daysToAdd = 21;
+    else if (lower.includes('next month') || lower.includes('1 month')) daysToAdd = 30;
+    else if (lower.includes('2 months')) daysToAdd = 60;
+    else if (lower.includes('3 months')) daysToAdd = 90;
+
+    // Add the days to today's date
+    target.setDate(target.getDate() + daysToAdd);
+    
+    // Return format YYYY-MM-DD (e.g., 2024-06-15)
+    return target.toISOString().split('T')[0]; 
+}
+
+// =========================
 // EXPRESS / WEBHOOK
 // =========================
 const app = express();
@@ -140,11 +164,15 @@ app.post('/webhook', async (req, res) => {
             break;
 
         case 'FORECAST':
+            // Calculate the future date based on what they asked
+            const targetDate = extractTargetDate(incomingMsg);
+            
             if (engine && !engine.killed) {
                 engine.stdin.write(JSON.stringify({
                     type: 'ASK_AI',
                     symbol,
-                    phone: fromNumber
+                    phone: fromNumber,
+                    targetDate: targetDate 
                 }) + '\n');
             }
             break;
@@ -260,20 +288,22 @@ function formatRecommendation(data) {
     const emoji = actionEmoji[data.action_type] || '⚪';
     const recs = (data.recommendations || []).map(r => `• ${r}`).join('\n');
 
-    return `💡 *CropEx Recommendation*
+    return `💡 *CropEx Trading Intelligence*
 
-🌾 Commodity: ${data.commodity}
-📍 Market: ${data.market}
+    🌾 Commodity: ${data.commodity.toUpperCase()}
+    📍 Market: ${data.market}
 
-${emoji} *Action: ${(data.action_type || '').toUpperCase()}*
-Confidence: ${data.confidence}
+    ${emoji} *Action Strategy: ${(data.action_type || '').toUpperCase()}*
+    🎯 Confidence Level: ${data.confidence.toUpperCase()}
 
-${recs}
+    *Data-Backed Insights:*
+    ${recs}
 
-📝 ${data.rationale}
+    *AI Rationale:*
+    📝 ${data.rationale}
 
-_Powered by CropEx AI_`;
-}
+    ⚠️ *FINANCIAL DISCLAIMER:* _This is AI-generated market advice based on historical forecasting. Do not risk capital you cannot afford to lose. Trading commodities involves significant risk._`;
+    }
 
 // =========================
 // NEWS FETCHER

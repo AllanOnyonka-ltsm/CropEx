@@ -108,11 +108,11 @@ struct OrderBook {
 std::vector<OrderBook*> market;
 
 // ─── AI FORECASTING INTEGRATION ───
-std::string get_whatsapp_forecast(std::string crop_name, double current_price) {
+std::string get_whatsapp_forecast(std::string crop_name, double current_price, std::string target_date) {
     httplib::Client cli("localhost", 8000);
 
     json predict_payload = {
-        {"date", "2025-12-05"}, // Hardcoded for prototype
+        {"date", target_date}, // Hardcoded for prototype
         {"admin1", "Nairobi"},
         {"market", "Wakulima (Nairobi)"},
         {"commodity", crop_name}, // e.g., "tomatoes"
@@ -144,6 +144,45 @@ std::string get_whatsapp_forecast(std::string crop_name, double current_price) {
     return format_data["formatted_message"]; 
 }
 
+// ─── AI RECOMMENDATION INTEGRATION ───
+std::string get_whatsapp_recommendation(std::string crop_name, double current_price) {
+    httplib::Client cli("localhost", 8000);
+    
+    // Hardcoded target date for 1 month from now
+    std::string target_date = "2024-06-15";
+
+    // get the prediction first
+    json predict_payload = {
+        {"date", target_date},
+        {"admin1", "Nairobi"},
+        {"market", "Wakulima (Nairobi)"},
+        {"commodity", crop_name},
+        {"pricetype", "wholesale"},
+        {"previous_month_price", current_price}
+    };
+
+    auto res1 = cli.Post("/predict", predict_payload.dump(), "application/json");
+    if (!res1 || res1->status != 200) return "{}";
+    
+    auto pred_data = json::parse(res1->body);
+    double predicted_price = pred_data["prediction_per_kg"];
+
+    // noow we ask the AI for the Recommendation Strategy based on that prediction
+    json rec_payload = {
+        {"commodity", crop_name},
+        {"market", "Wakulima (Nairobi)"},
+        {"admin1", "Nairobi"},
+        {"predicted_price", predicted_price},
+        {"previous_price", current_price},
+        {"pricetype", "wholesale"}
+    };
+
+    auto res2 = cli.Post("/recommendations", rec_payload.dump(), "application/json");
+    if (!res2 || res2->status != 200) return "{}";
+
+    return res2->body; // Returns the raw JSON object from Python
+}
+
 // ─── THREAD 1: LISTEN FOR ORDERS FROM NODE.JS ───
 void input_listener() {
     std::string line;
@@ -167,26 +206,73 @@ void input_listener() {
             // listen for WhatsApp requests
             std::string symbol = extract_string(line, "symbol");
             std::string phone = extract_string(line, "phone");
-            std::string full_name = "";
-            double current_price = 0.0;
+            std::string target_date = extract_string(line, "targetDate");
 
-            for (auto* book : market) {
+            if (target_date.empty()) target_date = "2024-12-31";
+            
+            std::string full_name = "";
+            double current_bag_price = 0.0;
+            double weight_kg = 1.0;
+
+             for (auto* book : market) {
                 if (book->symbol == symbol) {
                     full_name = book->name; 
-                    current_price = book->last_price;
+                    current_bag_price = book->last_price;
+                    
+                    if (book->unit == "90kg bag") weight_kg = 90.0;
+                    else if (book->unit == "50kg bag") weight_kg = 50.0;
+                    
                     break;
                 }
             }
 
-            // convert name to lowercase for the Python API (e.g., "Tomatoes" -> "tomatoes")
+            // convert name to lowercase for the Python API
             std::string crop_lower = full_name;
             for(auto& c : crop_lower) c = tolower(c);
 
-            // Call Python
-            std::string whatsapp_reply = get_whatsapp_forecast(crop_lower, current_price);
+            // Calculate the per-kg price
+            double price_per_kg = current_bag_price / weight_kg;
+
+            std::string whatsapp_reply = get_whatsapp_forecast(crop_lower, price_per_kg, target_date);
             
-             std::cout << "{\"type\":\"AI_RESPONSE\", \"phone\":\"" << phone << "\", \"message\":" << json(whatsapp_reply).dump() << "}" << std::endl;
+            std::cout << "{\"type\":\"AI_RESPONSE\", \"phone\":\"" << phone << "\", \"message\":" << json(whatsapp_reply).dump() << "}" << std::endl;
         }
+
+        else if (type == "ASK_RECOMMEND") {
+            std::string symbol = extract_string(line, "symbol");
+            std::string phone = extract_string(line, "phone");
+            
+            std::string full_name = "";
+            double current_bag_price = 0.0;
+            double weight_kg = 1.0;
+
+             for (auto* book : market) {
+                if (book->symbol == symbol) {
+                    full_name = book->name; 
+                    current_bag_price = book->last_price;
+                    if (book->unit == "90kg bag") weight_kg = 90.0;
+                    else if (book->unit == "50kg bag") weight_kg = 50.0;
+                    break;
+                }
+            }
+
+            std::string crop_lower = full_name;
+            for(auto& c : crop_lower) c = tolower(c);
+            double price_per_kg = current_bag_price / weight_kg;
+
+            // Call Python AI
+            std::string ai_raw_json = get_whatsapp_recommendation(crop_lower, price_per_kg);
+            
+            if (ai_raw_json != "{}") {
+                // Parse Allan's JSON, inject our routing tags, and send to Node
+                auto response_json = json::parse(ai_raw_json);
+                response_json["type"] = "RECOMMEND_RESPONSE";
+                response_json["phone"] = phone;
+                
+                std::cout << response_json.dump() << std::endl;
+            }
+        }
+        
     }
 }
 

@@ -542,20 +542,17 @@ def format_for_users(req: FormatRequest):
         estimated_cost = 0.50  # Estimated cost in KES per SMS
         
     elif format_type == "whatsapp":
-        # WhatsApp: Can be longer, more formatted
+        clean_prediction = round(prediction, 2)
+        
         formatted_message = f"""📊 *Market Price Forecast*
 
- Commodity: {commodity}
- Market: {market}
- Date: {date}
+🌾 Commodity: {commodity.title()}
+📍 Market: {market}
+📅 Target Date: {date}
 
- Predicted Price: *KES {prediction}/kg*
- Previous Price: KES {req.prediction_data.get('previous_month_price', 0)}/kg
- Confidence: {req.prediction_data.get('confidence_pct', 90)}%
+💰 *Forecasted Price: KES {clean_prediction} / kg*
 
-{req.prediction_data.get('note', '')}
-
-_Powered by Market Forecaster_"""
+_Powered by CropEx AI_"""
         estimated_cost = 0.0  # WhatsApp is free
         
     else:  # bulletin
