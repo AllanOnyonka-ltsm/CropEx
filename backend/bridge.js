@@ -36,15 +36,30 @@ const CROP_KEYWORDS = {
 const GREETING_WORDS = ['hi', 'hello', 'hey', 'jambo', 'habari', 'sasa', 'mambo', 'niaje', 'hujambo'];
 const FORECAST_WORDS = ['price', 'forecast', 'bei', 'market', 'soko', 'how much', 'ngapi', 'what is'];
 const RECOMMEND_WORDS = ['should i sell', 'sell', 'hold', 'uza', 'shika', 'recommendation', 'advice', 'ushauri', 'nifanye nini'];
+const TRADE_WORDS = ['buy', 'sell', 'nunua', 'uza'];
 
-function detectIntent(msg) {
+const pendingOrders = {};
+
+function detectIntent(msg, fromNumber) {
     const lower = msg.toLowerCase().trim();
 
+    // 1. YES/NO confirmation
+    if (lower === 'yes' || lower === 'no') {
+        return { intent: 'CONFIRM', symbol: null };
+    }
+
+    // Check if user is responding to a qty question
+    if (pendingOrders[fromNumber]?.status === 'awaiting_qty') {
+        const qty = extractQty(lower);
+        if (qty) return { intent: 'TRADE_QTY', symbol: null, qty };
+    }
+
+    // 2. Greeting
     if (GREETING_WORDS.some(w => lower.includes(w))) {
         return { intent: 'GREETING', symbol: null };
     }
 
-    // Detect crop symbol
+    // 3. Detect crop symbol
     let symbol = null;
     for (const [sym, keywords] of Object.entries(CROP_KEYWORDS)) {
         if (keywords.some(k => lower.includes(k))) {
@@ -53,11 +68,20 @@ function detectIntent(msg) {
         }
     }
 
+    // 4. Trade intent (before recommend)
+    const wantsTrade = TRADE_WORDS.some(w => lower.includes(w));
+    if (wantsTrade) {
+        const side = (lower.includes('buy') || lower.includes('nunua')) ? 'BUY' : 'SELL';
+        const qty = extractQty(lower);
+        return { intent: 'TRADE', symbol, side, qty };
+    }
+
+    // 5. No crop found
     if (!symbol) {
         return { intent: 'UNKNOWN', symbol: null };
     }
 
-    // Detect intent — recommendation vs forecast
+    // 6. Recommend vs Forecast
     const wantsRecommendation = RECOMMEND_WORDS.some(w => lower.includes(w));
     return {
         intent: wantsRecommendation ? 'RECOMMEND' : 'FORECAST',
@@ -143,6 +167,11 @@ function extractTargetDate(msg) {
     return target.toISOString().split('T')[0]; 
 }
 
+function extractQty(msg) {
+    const match = msg.match(/(\d+)\s*(bag|bags)?/);
+    return match ? parseInt(match[1]) : null;
+}
+
 // =========================
 // EXPRESS / WEBHOOK
 // =========================
@@ -155,7 +184,7 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`\n[WHATSAPP RCVD] From: ${fromNumber} | Msg: "${incomingMsg}"`);
 
-    const { intent, symbol } = detectIntent(incomingMsg);
+    const { intent, symbol, side, qty } = detectIntent(incomingMsg, fromNumber);
     console.log(`[INTENT] ${intent} | Symbol: ${symbol}`);
 
     switch (intent) {
@@ -180,6 +209,143 @@ app.post('/webhook', async (req, res) => {
         case 'RECOMMEND':
             await getRecommendation(symbol, fromNumber);
             break;
+
+        case 'TRADE': {
+            if (!symbol) {
+                await sendWhatsApp(fromNumber, `❓ *Patrick here!* Which crop do you want to trade?\n\nTry: "Buy 5 bags of maize" or "Sell 3 bags of tomatoes"`);
+                break;
+            }
+            if (!qty) {
+                pendingOrders[fromNumber] = {
+                    side,
+                    symbol,
+                    qty: null,
+                    status: 'awaiting_qty'  // ← add this
+                };
+                await sendWhatsApp(fromNumber, `🌾 *Patrick here!* How many bags of ${symbol} do you want to ${side.toLowerCase()}?`);
+                break;
+            }
+
+            // Store pending order
+            pendingOrders[fromNumber] = {
+                side, 
+                symbol,
+                qty,
+                status: 'awaiting_confirmation'
+            };
+
+            await sendWhatsApp(fromNumber, 
+                `📋 *Patrick — Trade Summary*\n\n` +
+                `${side === 'BUY' ? '🔵 BUY' : '🔴 SELL'} *${qty} bags* of *${symbol}*\n\n` +
+                `Reply *YES* to confirm or *NO* to cancel.\n\n` +
+                `_You have 3 minutes to confirm or the order will be cancelled._`
+            );
+
+            // Reminder at 2 minutes
+            pendingOrders[fromNumber].reminderTimer = setTimeout(async () => {
+                if (pendingOrders[fromNumber]?.status === 'awaiting_confirmation') {
+                    await sendWhatsApp(fromNumber,
+                        `⏰ *Patrick here!* You still have a pending trade:\n\n` +
+                        `${side === 'BUY' ? '🔵 BUY' : '🔴 SELL'} *${qty} bags* of *${symbol}*\n\n` +
+                        `Reply *YES* to confirm. You have *1 minute* left or it will be cancelled.`
+                    );
+                }
+            }, 2 * 60 * 1000);
+
+            // Cancel at 3 minutes
+            pendingOrders[fromNumber].cancelTimer = setTimeout(async () => {
+                if (pendingOrders[fromNumber]?.status === 'awaiting_confirmation') {
+                    delete pendingOrders[fromNumber];
+                    await sendWhatsApp(fromNumber,
+                        `❌ *Patrick here!* Your trade was cancelled due to no response.\n\n` +
+                        `Send a new order whenever you're ready.`
+                    );
+                }
+            }, 3 * 60 * 1000);
+
+            break;
+        }
+
+        case 'CONFIRM': {
+            const pending = pendingOrders[fromNumber];
+            if (!pending) {
+                await sendWhatsApp(fromNumber, `🤷 *Patrick here!* No pending trade found. Send a new order to get started.`);
+                break;
+            }
+
+            const upper = incomingMsg.trim().toUpperCase();
+
+            if (upper === 'YES') {
+                clearTimeout(pending.reminderTimer);
+                clearTimeout(pending.cancelTimer);
+                delete pendingOrders[fromNumber];
+
+                if (engine && !engine.killed) {
+                    engine.stdin.write(JSON.stringify({
+                        type: 'NEW_ORDER',
+                        symbol: pending.symbol,
+                        side: pending.side,
+                        qty: pending.qty,
+                        price: 0  // market order — engine uses best bid/ask
+                    }) + '\n');
+                }
+
+                await sendWhatsApp(fromNumber,
+                    `✅ *Trade Executed!*\n\n` +
+                    `${pending.side === 'BUY' ? '🔵 BUY' : '🔴 SELL'} *${pending.qty} bags* of *${pending.symbol}*\n\n` +
+                    `_Patrick — Your CropEx Market Advisor_`
+                );
+
+            } else if (upper === 'NO') {
+                clearTimeout(pending.reminderTimer);
+                clearTimeout(pending.cancelTimer);
+                delete pendingOrders[fromNumber];
+
+                await sendWhatsApp(fromNumber,
+                    `❌ *Trade cancelled.* No worries!\n\nSend a new order whenever you're ready.\n\n_Patrick — Your CropEx Market Advisor_`
+                );
+            }
+            break;
+        }
+
+        case 'TRADE_QTY': {
+            const partial = pendingOrders[fromNumber];
+            if (!partial) break;
+
+            partial.qty = qty;
+            partial.status = 'awaiting_confirmation';
+
+            await sendWhatsApp(fromNumber,
+                `📋 *Patrick — Trade Summary*\n\n` +
+                `${partial.side === 'BUY' ? '🔵 BUY' : '🔴 SELL'} *${qty} bags* of *${partial.symbol}*\n\n` +
+                `Reply *YES* to confirm or *NO* to cancel.\n\n` +
+                `_You have 3 minutes to confirm or the order will be cancelled._`
+            );
+
+            // Reminder at 2 minutes
+            partial.reminderTimer = setTimeout(async () => {
+                if (pendingOrders[fromNumber]?.status === 'awaiting_confirmation') {
+                    await sendWhatsApp(fromNumber,
+                        `⏰ *Patrick here!* You still have a pending trade:\n\n` +
+                        `${partial.side === 'BUY' ? '🔵 BUY' : '🔴 SELL'} *${qty} bags* of *${partial.symbol}*\n\n` +
+                        `Reply *YES* to confirm. You have *1 minute* left or it will be cancelled.`
+                    );
+                }
+            }, 2 * 60 * 1000);
+
+            // Cancel at 3 minutes
+            partial.cancelTimer = setTimeout(async () => {
+                if (pendingOrders[fromNumber]?.status === 'awaiting_confirmation') {
+                    delete pendingOrders[fromNumber];
+                    await sendWhatsApp(fromNumber,
+                        `❌ *Patrick here!* Your trade was cancelled due to no response.\n\n` +
+                        `Send a new order whenever you're ready.`
+                    );
+                }
+            }, 3 * 60 * 1000);
+
+            break;
+        }
 
         case 'UNKNOWN':
         default:

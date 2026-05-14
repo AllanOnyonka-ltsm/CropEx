@@ -29,7 +29,8 @@ CROP_THRESHOLDS = {
     "kale": 50,
     "onion": 13,
     "potatoes": 50,
-    "tomatoes": 64
+    "tomatoes": 64,
+    "maize": 80
 }
 
 ALLOWED_COMMODITIES = set(CROP_THRESHOLDS.keys())
@@ -136,7 +137,9 @@ def build_feature_vector(req: PredictRequest):
 # HELPER: RF CONFIDENCE
 # =========================
 def rf_confidence(model, X):
-    tree_preds = np.array([tree.predict(X)[0] for tree in model.estimators_])
+    tree_preds = np.array(
+        [tree.predict(X)[0] for tree in model.estimators_]
+        )
     mean = tree_preds.mean()
     low = np.percentile(tree_preds, 5)
     high = np.percentile(tree_preds, 95)
