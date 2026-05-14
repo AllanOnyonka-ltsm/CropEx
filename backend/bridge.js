@@ -1,53 +1,173 @@
 const { spawn } = require('child_process');
 const WebSocket = require('ws');
-
 const express = require('express');
 const twilio = require('twilio');
 
-// news api
-const GNEWS_API_KEY = "cdae864b8249cf59c5b45bdf3a349177";
-const NEWS_URL = `https://gnews.io/api/v4/search?q="commodity" OR "maize" OR "wheat" OR "Kenya agriculture"&lang=en&sortBy=publishedAt&apikey=${GNEWS_API_KEY}`;
+const RSSParser = require('rss-parser');
+const rssParser = new RSSParser();
 
-// twilio api
+// =========================
+// CONFIG
+// =========================
+const GNEWS_API_KEY = "cdae864b8249cf59c5b45bdf3a349177";
+const NEWS_URL = `https://gnews.io/api/v4/search?q="commodity" OR "maize" OR "wheat" OR "Kenya agriculture"&lang=en&sortBy=publishedAt&max=6&apikey=${GNEWS_API_KEY}`;
+
 const twilioClient = twilio('AC33fa0c99c8f730fe28e8fc2f02610cbf', '2514b481130167f01f238e628f5ec344');
 const TWILIO_SANDBOX_NUMBER = 'whatsapp:+14155238886';
+const PYTHON_API = 'http://localhost:8000';
 
-// express server
+// =========================
+// NLP ROUTER
+// =========================
+
+// Crop keyword map — English + Swahili
+const CROP_KEYWORDS = {
+    'TMO': ['tomato', 'tomatoes', 'nyanya'],
+    'PTO': ['potato', 'potatoes', 'viazi'],
+    'ONN': ['onion', 'onions', 'vitunguu'],
+    'MAZ': ['maize', 'corn', 'mahindi'],
+    'BNS': ['bean', 'beans', 'maharagwe'],
+    'WHT': ['wheat', 'ngano'],
+    'SGM': ['sorghum', 'mtama'],
+    'CAS': ['cassava', 'muhogo'],
+};
+
+// Intent detection
+const GREETING_WORDS = ['hi', 'hello', 'hey', 'jambo', 'habari', 'sasa', 'mambo', 'niaje', 'hujambo'];
+const FORECAST_WORDS = ['price', 'forecast', 'bei', 'market', 'soko', 'how much', 'ngapi', 'what is'];
+const RECOMMEND_WORDS = ['should i sell', 'sell', 'hold', 'uza', 'shika', 'recommendation', 'advice', 'ushauri', 'nifanye nini'];
+
+function detectIntent(msg) {
+    const lower = msg.toLowerCase().trim();
+
+    if (GREETING_WORDS.some(w => lower.includes(w))) {
+        return { intent: 'GREETING', symbol: null };
+    }
+
+    // Detect crop symbol
+    let symbol = null;
+    for (const [sym, keywords] of Object.entries(CROP_KEYWORDS)) {
+        if (keywords.some(k => lower.includes(k))) {
+            symbol = sym;
+            break;
+        }
+    }
+
+    if (!symbol) {
+        return { intent: 'UNKNOWN', symbol: null };
+    }
+
+    // Detect intent — recommendation vs forecast
+    const wantsRecommendation = RECOMMEND_WORDS.some(w => lower.includes(w));
+    return {
+        intent: wantsRecommendation ? 'RECOMMEND' : 'FORECAST',
+        symbol
+    };
+}
+
+// =========================
+// WELCOME + HELP MESSAGES
+// =========================
+const WELCOME_MSG = `👋 *Welcome to CropEx!*
+
+Kenya's AI-powered crop market intelligence.
+
+You can ask me:
+📊 *Price forecast* — "What is the price of tomatoes?"
+💡 *Sell advice* — "Should I sell my maize?"
+
+Supported crops:
+🌽 Maize (mahindi)
+🍅 Tomatoes (nyanya)
+🥔 Potatoes (viazi)
+🧅 Onions (vitunguu)
+🌾 Wheat (ngano)
+🫘 Beans (maharagwe)
+
+_Powered by CropEx Market Engine_`;
+
+const UNKNOWN_MSG = `❓ I didn't understand that.
+
+Try asking:
+• "What is the forecast for tomatoes?"
+• "Should I sell my maize?"
+• "Bei ya viazi ni ngapi?"
+
+Type *hi* to see the full menu.`;
+
+// =========================
+// PYTHON API HELPERS
+// =========================
+
+async function getRecommendation(symbol, fromNumber) {
+    // Find the book data from engine — we'll request via C++ ASK_RECOMMEND
+    // C++ will call /recommendations and emit RECOMMEND_RESPONSE
+    if (engine && !engine.killed) {
+        engine.stdin.write(JSON.stringify({
+            type: 'ASK_RECOMMEND',
+            symbol,
+            phone: fromNumber
+        }) + '\n');
+    }
+}
+
+async function sendWhatsApp(to, body) {
+    return twilioClient.messages.create({
+        body,
+        from: TWILIO_SANDBOX_NUMBER,
+        to
+    });
+}
+
+// =========================
+// EXPRESS / WEBHOOK
+// =========================
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 
-app.post('/webhook', (req, res) => {
-    const incomingMsg = req.body.Body.toLowerCase();
-    const fromNumber = req.body.From; 
+app.post('/webhook', async (req, res) => {
+    const incomingMsg = req.body.Body || '';
+    const fromNumber = req.body.From;
 
-    console.log(`\n[WHATSAPP RCVD] From: ${fromNumber} | Msg: ${incomingMsg}`);
+    console.log(`\n[WHATSAPP RCVD] From: ${fromNumber} | Msg: "${incomingMsg}"`);
 
-    let symbol = '';
-    if (incomingMsg.includes('tomato')) symbol = 'TMO';
-    else if (incomingMsg.includes('potato')) symbol = 'PTO';
-    else if (incomingMsg.includes('onion')) symbol = 'ONN';
-    // i will add more crops here later //liman
+    const { intent, symbol } = detectIntent(incomingMsg);
+    console.log(`[INTENT] ${intent} | Symbol: ${symbol}`);
 
-    if (symbol) {
-        // Send request down to C++ with the farmer's phone number
-        if (engine && !engine.killed) {
-            engine.stdin.write(JSON.stringify({ type: 'ASK_AI', symbol: symbol, phone: fromNumber }) + '\n');
-        }
-    } else {
-        twilioClient.messages.create({
-            body: "Welcome to CropEx! Ask me about crop prices, e.g., 'What is the forecast for tomatoes?'",
-            from: TWILIO_SANDBOX_NUMBER,
-            to: fromNumber
-        });
+    switch (intent) {
+        case 'GREETING':
+            await sendWhatsApp(fromNumber, WELCOME_MSG);
+            break;
+
+        case 'FORECAST':
+            if (engine && !engine.killed) {
+                engine.stdin.write(JSON.stringify({
+                    type: 'ASK_AI',
+                    symbol,
+                    phone: fromNumber
+                }) + '\n');
+            }
+            break;
+
+        case 'RECOMMEND':
+            await getRecommendation(symbol, fromNumber);
+            break;
+
+        case 'UNKNOWN':
+        default:
+            await sendWhatsApp(fromNumber, UNKNOWN_MSG);
+            break;
     }
 
-    // receipt to Twilio immediately so it doesn't timeout
-    res.send('<Response></Response>'); 
+    // Respond to Twilio immediately to prevent timeout
+    res.send('<Response></Response>');
 });
 
 app.listen(5000, () => console.log("--- twilio webhook listening on port 5000 ---"));
 
-// setup websocket server
+// =========================
+// WEBSOCKET SERVER
+// =========================
 const wss = new WebSocket.Server({ port: 8080 });
 console.log("--- cropex bridge live on localhost:8080 ---");
 
@@ -70,7 +190,6 @@ wss.on('connection', (ws) => {
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            
             if (data.type === 'NEW_ORDER') {
                 console.log(`\n[ORDER RECEIVED] ${data.side} ${data.qty} ${data.symbol} @ KES ${data.price}`);
                 if (engine && !engine.killed) {
@@ -81,34 +200,39 @@ wss.on('connection', (ws) => {
             console.error('[ws] error parsing incoming message:', err);
         }
     });
-    
 });
 
-// spawn the c++ engine
+// =========================
+// C++ ENGINE
+// =========================
 const engine = spawn('./cropex-engine.exe');
 
-// pipe c++ output to websockets
 engine.stdout.on('data', (data) => {
     const output = data.toString().trim();
     const lines = output.split('\n');
-    
-    lines.forEach(line => {
+
+    lines.forEach(async line => {
         if (!line) return;
         try {
             const json = JSON.parse(line);
-            
+
             if (json.type === 'AI_RESPONSE') {
-                console.log(`[SENDING WHATSAPP TO ${json.phone}]`);
-                twilioClient.messages.create({
-                    body: json.message,
-                    from: TWILIO_SANDBOX_NUMBER,
-                    to: json.phone
-                }).then(message => console.log(`✓ Message Sent! SID: ${message.sid}`))
-                  .catch(err => console.error("Twilio Error:", err));
+                // Forecast response from /predict → /format
+                console.log(`[SENDING FORECAST TO ${json.phone}]`);
+                await sendWhatsApp(json.phone, json.message);
+                console.log(`✓ Forecast sent`);
+
+            } else if (json.type === 'RECOMMEND_RESPONSE') {
+                // Recommendation response from /recommendations
+                console.log(`[SENDING RECOMMENDATION TO ${json.phone}]`);
+                const msg = formatRecommendation(json);
+                await sendWhatsApp(json.phone, msg);
+                console.log(`✓ Recommendation sent`);
+
             } else {
                 broadcast(json);
-                process.stdout.write('.'); 
-            } 
+                process.stdout.write('.');
+            }
         } catch (e) {
             // ignore partial fragments
         }
@@ -123,7 +247,37 @@ engine.on('close', (code) => {
     console.log(`[engine halted] code: ${code}`);
 });
 
-// fetch and broadcast news
+// =========================
+// FORMAT RECOMMENDATION
+// =========================
+function formatRecommendation(data) {
+    const actionEmoji = {
+        'sell': '🟢',
+        'hold': '🟡',
+        'buy': '🔵'
+    };
+
+    const emoji = actionEmoji[data.action_type] || '⚪';
+    const recs = (data.recommendations || []).map(r => `• ${r}`).join('\n');
+
+    return `💡 *CropEx Recommendation*
+
+🌾 Commodity: ${data.commodity}
+📍 Market: ${data.market}
+
+${emoji} *Action: ${(data.action_type || '').toUpperCase()}*
+Confidence: ${data.confidence}
+
+${recs}
+
+📝 ${data.rationale}
+
+_Powered by CropEx AI_`;
+}
+
+// =========================
+// NEWS FETCHER
+// =========================
 async function fetchNews() {
     try {
         const res = await fetch(NEWS_URL);
@@ -134,7 +288,6 @@ async function fetchNews() {
             return;
         }
 
-        // Store to cache
         latestNews = data.articles.slice(0, 6).map(a => ({
             title: a.title,
             source: a.source.name,
@@ -150,4 +303,3 @@ async function fetchNews() {
 
 fetchNews();
 setInterval(fetchNews, 5 * 60 * 1000);
-// setInterval(fetchNews, 15 * 60 * 1000);
