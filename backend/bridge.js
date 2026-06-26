@@ -3,6 +3,8 @@ const WebSocket = require('ws');
 const express = require('express');
 const twilio = require('twilio');
 
+require('dotenv').config({ path: '../.env' }); 
+
 const RSSParser = require('rss-parser');
 const rssParser = new RSSParser();
 
@@ -12,7 +14,7 @@ const rssParser = new RSSParser();
 const GNEWS_API_KEY = "cdae864b8249cf59c5b45bdf3a349177";
 const NEWS_URL = `https://gnews.io/api/v4/search?q="commodity" OR "maize" OR "wheat" OR "Kenya agriculture"&lang=en&sortBy=publishedAt&max=6&apikey=${GNEWS_API_KEY}`;
 
-const twilioClient = twilio('AC33fa0c99c8f730fe28e8fc2f02610cbf', '2514b481130167f01f238e628f5ec344');
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const TWILIO_SANDBOX_NUMBER = 'whatsapp:+14155238886';
 const PYTHON_API = 'http://localhost:8000';
 
@@ -399,7 +401,7 @@ wss.on('connection', (ws) => {
 // =========================
 // C++ ENGINE
 // =========================
-const engine = spawn('./cropex-engine.exe');
+const engine = spawn('./matching_engine');
 
 engine.stdout.on('data', (data) => {
     const output = data.toString().trim();
