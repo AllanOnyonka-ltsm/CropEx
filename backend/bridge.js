@@ -415,7 +415,8 @@ engine.stdout.on('data', (data) => {
             if (json.type === 'AI_RESPONSE') {
                 // Forecast response from /predict → /format
                 console.log(`[SENDING FORECAST TO ${json.phone}]`);
-                await sendWhatsApp(json.phone, json.message);
+                const cleanMessage = sanitizeForecastMessage(json.message);
+                await sendWhatsApp(json.phone, cleanMessage);
                 console.log(`✓ Forecast sent`);
 
             } else if (json.type === 'RECOMMEND_RESPONSE') {
@@ -497,6 +498,25 @@ async function fetchNews() {
     } catch (err) {
         console.error('[news] fetch failed:', err.message);
     }
+}
+
+// =========================
+// FORECAST SANITIZER
+// =========================
+function sanitizeForecastMessage(msg) {
+    if (!msg) return msg;
+    let clean = msg;
+
+    clean = clean.replace(/(KES\s+\d+\.\d{2})\d+/gi, '$1'); 
+
+    const warningIndex = clean.indexOf("⚠️");
+    if (warningIndex !== -1) {
+        clean = clean.substring(0, warningIndex).trim();
+    }
+
+    clean = clean.replace(/📊\s+Confidence:\s+\d+(\.\d+)?%/gi, '');
+    clean = clean.trim() + "\n\n_Powered by CropEx_";
+    return clean;
 }
 
 fetchNews();
