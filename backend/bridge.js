@@ -44,24 +44,18 @@ const pendingOrders = {};
 
 function detectIntent(msg, fromNumber) {
     const lower = msg.toLowerCase().trim();
-
-    // 1. YES/NO confirmation
     if (lower === 'yes' || lower === 'no') {
         return { intent: 'CONFIRM', symbol: null };
     }
-
-    // Check if user is responding to a qty question
     if (pendingOrders[fromNumber]?.status === 'awaiting_qty') {
         const qty = extractQty(lower);
         if (qty) return { intent: 'TRADE_QTY', symbol: null, qty };
     }
 
-    // 2. Greeting
     if (GREETING_WORDS.some(w => lower.includes(w))) {
         return { intent: 'GREETING', symbol: null };
     }
 
-    // 3. Detect crop symbol
     let symbol = null;
     for (const [sym, keywords] of Object.entries(CROP_KEYWORDS)) {
         if (keywords.some(k => lower.includes(k))) {
@@ -70,7 +64,11 @@ function detectIntent(msg, fromNumber) {
         }
     }
 
-    // 4. Trade intent (before recommend)
+    const wantsRecommendation = RECOMMEND_WORDS.some(w => lower.includes(w));
+    if (wantsRecommendation && symbol) {
+        return { intent: 'RECOMMEND', symbol };
+    }
+
     const wantsTrade = TRADE_WORDS.some(w => lower.includes(w));
     if (wantsTrade) {
         const side = (lower.includes('buy') || lower.includes('nunua')) ? 'BUY' : 'SELL';
@@ -78,17 +76,11 @@ function detectIntent(msg, fromNumber) {
         return { intent: 'TRADE', symbol, side, qty };
     }
 
-    // 5. No crop found
     if (!symbol) {
         return { intent: 'UNKNOWN', symbol: null };
     }
 
-    // 6. Recommend vs Forecast
-    const wantsRecommendation = RECOMMEND_WORDS.some(w => lower.includes(w));
-    return {
-        intent: wantsRecommendation ? 'RECOMMEND' : 'FORECAST',
-        symbol
-    };
+    return { intent: 'FORECAST', symbol };
 }
 
 // =========================
@@ -451,28 +443,40 @@ function formatRecommendation(data) {
     const actionEmoji = {
         'sell': '🟢',
         'hold': '🟡',
+        'monitor': '🟠',
         'buy': '🔵'
     };
 
-    const emoji = actionEmoji[data.action_type] || '⚪';
-    const recs = (data.recommendations || []).map(r => `• ${r}`).join('\n');
+    const action = data.action || data.action_type || 'hold';
+    const confidence = data.model_confidence || data.confidence || 'medium';
+    const recommendations = data.reasons || data.recommendations || [];
+    const emoji = actionEmoji[action] || '⚪';
+    const recs = recommendations.map(r => `• ${r}`).join('\n');
+
+    // Use Gemini-generated farmer message if available
+    if (data.farmer_message) {
+        return `💡 *CropEx Trading Intelligence*\n\n${data.farmer_message}\n\n` +
+               `${emoji} *Strategy: ${action.toUpperCase()}*\n\n` +
+               `*Insights:*\n${recs}\n\n` +
+               `⚠️ _AI-generated advice. Do not risk capital you cannot afford to lose._`;
+    }
 
     return `💡 *CropEx Trading Intelligence*
 
-    🌾 Commodity: ${data.commodity.toUpperCase()}
-    📍 Market: ${data.market}
+🌾 Commodity: ${(data.commodity || '').toUpperCase()}
+📍 Market: ${data.market || ''}
 
-    ${emoji} *Action Strategy: ${(data.action_type || '').toUpperCase()}*
-    🎯 Confidence Level: ${data.confidence.toUpperCase()}
+${emoji} *Action Strategy: ${action.toUpperCase()}*
+🎯 Confidence: ${confidence.toUpperCase()}
 
-    *Data-Backed Insights:*
-    ${recs}
+*Data-Backed Insights:*
+${recs}
 
-    *AI Rationale:*
-    📝 ${data.rationale}
+*AI Rationale:*
+📝 ${data.rationale || ''}
 
-    ⚠️ *FINANCIAL DISCLAIMER:* _This is AI-generated market advice based on historical forecasting. Do not risk capital you cannot afford to lose. Trading commodities involves significant risk._`;
-    }
+⚠️ *FINANCIAL DISCLAIMER:* _AI-generated market advice. Do not risk capital you cannot afford to lose._`;
+}
 
 // =========================
 // NEWS FETCHER

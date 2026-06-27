@@ -144,7 +144,6 @@ std::string get_whatsapp_forecast(std::string crop_name, double current_price, s
     return format_data["formatted_message"]; 
 }
 
-// ─── AI RECOMMENDATION INTEGRATION ───
 std::string get_whatsapp_recommendation(std::string crop_name, double current_price) {
     httplib::Client cli("localhost", 8000);
     
@@ -166,15 +165,25 @@ std::string get_whatsapp_recommendation(std::string crop_name, double current_pr
     
     auto pred_data = json::parse(res1->body);
     double predicted_price = pred_data["prediction_per_kg"];
+    
+    // Parse the missing validation fields returned from /predict
+    double lower_bound     = pred_data["lower_bound"];
+    double upper_bound     = pred_data["upper_bound"];
+    double confidence_pct  = pred_data["confidence_pct"];
+    bool unreasonable      = pred_data["unreasonable"];
 
-    // noow we ask the AI for the Recommendation Strategy based on that prediction
+    // now we ask the AI for the Recommendation Strategy based on that prediction
     json rec_payload = {
         {"commodity", crop_name},
         {"market", "Wakulima (Nairobi)"},
         {"admin1", "Nairobi"},
         {"predicted_price", predicted_price},
         {"previous_price", current_price},
-        {"pricetype", "wholesale"}
+        {"pricetype", "wholesale"},
+        {"lower_bound", lower_bound},
+        {"upper_bound", upper_bound},
+        {"confidence_pct", confidence_pct},
+        {"unreasonable", unreasonable}
     };
 
     auto res2 = cli.Post("/recommendations", rec_payload.dump(), "application/json");
@@ -278,9 +287,9 @@ void input_listener() {
 
 void seed_market() {
     market.push_back(new OrderBook("PTO", "Potatoes", "90kg bag", 5000.0));
-    market.push_back(new OrderBook("MAZ", "Maize", "90kg bag", 3200.0));
+    market.push_back(new OrderBook("MAZ", "Maize", "90kg bag", 4500.0)); 
     market.push_back(new OrderBook("WHT", "Wheat", "90kg bag", 4100.0));
-    market.push_back(new OrderBook("BNS", "Beans", "90kg bag", 8500.0));
+    market.push_back(new OrderBook("BNS", "Beans", "90kg bag", 10800.0)); 
     market.push_back(new OrderBook("ONN", "Onions", "90kg bag", 6000.0));
     market.push_back(new OrderBook("TMO", "Tomatoes", "90kg bag", 4500.0));
     market.push_back(new OrderBook("SGM", "Sorghum", "90kg bag", 2800.0));
