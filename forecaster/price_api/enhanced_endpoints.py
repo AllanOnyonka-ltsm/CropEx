@@ -56,16 +56,16 @@ async def _call_claude(prompt: str, max_tokens: int = 200) -> Optional[str]:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class RecommendationRequest(BaseModel):
-    commodity:      str
-    market:         str
-    admin1:         str
-    pricetype:      str
+    commodity:       str
+    market:          str
+    admin1:          str
+    pricetype:       str
     predicted_price: float
     previous_price:  float
-    lower_bound:     float   # from /predict response
-    upper_bound:     float   # from /predict response
-    confidence_pct:  float   # from /predict response
-    unreasonable:    bool    # from /predict response
+    lower_bound:     Optional[float] = None
+    upper_bound:     Optional[float] = None
+    confidence_pct:  Optional[float] = None
+    unreasonable:    Optional[bool]  = None
 
 class RecommendationResponse(BaseModel):
     commodity:       str
@@ -167,12 +167,18 @@ async def get_recommendations(req: RecommendationRequest, ALLOWED_COMMODITIES: s
     if req.previous_price <= 0:
         raise HTTPException(400, "previous_price must be > 0")
 
+    # ── Fallbacks if C++ didn't send these fields ──
+    lower_bound   = req.lower_bound   if req.lower_bound   is not None else req.previous_price * 0.90
+    upper_bound   = req.upper_bound   if req.upper_bound   is not None else req.previous_price * 1.10
+    confidence_pct = req.confidence_pct if req.confidence_pct is not None else 80.0
+    unreasonable  = req.unreasonable  if req.unreasonable  is not None else False
+
     trend_pct = ((req.predicted_price - req.previous_price) / req.previous_price) * 100
 
     action, urgency, trend, conf, reasons = _decision_logic(
         req.predicted_price, req.previous_price,
-        req.lower_bound, req.upper_bound,
-        req.confidence_pct, req.unreasonable,
+        lower_bound, upper_bound,
+        confidence_pct, unreasonable,
     )
 
     # ── Farmer-facing WhatsApp message via Claude ─────────────────────────────
@@ -180,7 +186,7 @@ async def get_recommendations(req: RecommendationRequest, ALLOWED_COMMODITIES: s
 
 Crop: {req.commodity} | Market: {req.market} | Pricetype: {req.pricetype}
 Predicted: KES {req.predicted_price:.0f}/kg | Previous: KES {req.previous_price:.0f}/kg | Change: {trend_pct:+.1f}%
-Range: KES {req.lower_bound:.0f}–{req.upper_bound:.0f}/kg | Confidence: {conf}
+Range: KES {lower_bound:.0f}–{upper_bound:.0f}/kg | Confidence: {conf}
 Action: {action.upper()} ({urgency})
 
 Use simple English, occasional Swahili (habari, bei, mazao), and emojis.
@@ -196,7 +202,7 @@ Tell the farmer exactly what to do. Return ONLY the message."""
     rationale = (
         f"Price {'rising' if trend_pct > 0 else 'falling'} {abs(trend_pct):.1f}% "
         f"from KES {req.previous_price:.0f} → KES {req.predicted_price:.0f}/kg at {req.market}. "
-        f"Model confidence: {conf}. Interval width: KES {req.upper_bound - req.lower_bound:.0f}/kg."
+        f"Model confidence: {conf}. Interval width: KES {upper_bound - lower_bound:.0f}/kg."
     )
 
     return RecommendationResponse(

@@ -41,7 +41,7 @@ cd backend
 g++ -O3 -std=c++17 market_sim.cpp -o cropex-engine
 
 # Execute
-./cropex-engine
+./matching_engine
 * 2. Frontend Dashboard
 * The dashboard connects to the engine stream.
 

@@ -16,7 +16,7 @@ uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 # (Ensure httplib.h and json.hpp are in the directory)
 cd backend
 rm -f matching_engine
-g++ -std=c++17 -O3 cropex-engine.cpp -o matching_engine -pthread
+g++ -std=c++17 -O3 market_sim.cpp -o matching_engine -pthread
 
 
 # 3. NODE.JS BRIDGE (Port 5000 & WS Port 8080)
