@@ -1,308 +1,347 @@
-import { useState, useEffect, useRef } from 'react'
-import { ChartComponent } from './components/Chart';
-import './App.css'
-import logo from './assets/logo_main.png';
+import { useEffect, useMemo, useState } from 'react'
 
-interface Toast {
-  id: number;
-  message: string;
-  type: 'BUY' | 'SELL';
+type SymbolCode = 'MAZ' | 'WHT' | 'BNS' | 'ONN' | 'TMO' | 'SGM' | 'CAS' | 'PTO'
+
+type QuoteMessage = {
+  symbol: SymbolCode
+  name: string
+  price: number
+  bid?: number
+  ask?: number
+  time: number
 }
 
-interface CandleData {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
+type QuoteState = {
+  symbol: SymbolCode
+  englishName: string
+  swahiliName: string
+  price: number | null
+  change: number | null
+  direction: 'up' | 'down' | 'flat'
+  bid: number | null
+  ask: number | null
+  updatedAt: number | null
 }
 
-interface SymbolState {
-  price: number;
-  bid: number;
-  ask: number;
-  bidVol: number;
-  askVol: number;
-  name: string;
-  unit: string;
-  candles: CandleData[];
+const SYMBOL_ORDER: SymbolCode[] = ['MAZ', 'WHT', 'BNS', 'ONN', 'TMO', 'SGM', 'CAS', 'PTO']
+
+const SWAHILI_NAMES: Record<SymbolCode, string> = {
+  MAZ: 'Mahindi',
+  WHT: 'Ngano',
+  BNS: 'Maharagwe',
+  ONN: 'Vitunguu',
+  TMO: 'Nyanya',
+  SGM: 'Mtama',
+  CAS: 'Muhogo',
+  PTO: 'Viazi',
 }
 
-const SYMBOLS = ['PTO', 'MAZ', 'WHT', 'BNS', 'ONN', 'TMO', 'SGM', 'CAS'];
+const INITIAL_QUOTES: Record<SymbolCode, QuoteState> = {
+  MAZ: { symbol: 'MAZ', englishName: 'Maize', swahiliName: SWAHILI_NAMES.MAZ, price: null, change: null, direction: 'flat', bid: null, ask: null, updatedAt: null },
+  WHT: { symbol: 'WHT', englishName: 'Wheat', swahiliName: SWAHILI_NAMES.WHT, price: null, change: null, direction: 'flat', bid: null, ask: null, updatedAt: null },
+  BNS: { symbol: 'BNS', englishName: 'Beans', swahiliName: SWAHILI_NAMES.BNS, price: null, change: null, direction: 'flat', bid: null, ask: null, updatedAt: null },
+  ONN: { symbol: 'ONN', englishName: 'Onions', swahiliName: SWAHILI_NAMES.ONN, price: null, change: null, direction: 'flat', bid: null, ask: null, updatedAt: null },
+  TMO: { symbol: 'TMO', englishName: 'Tomatoes', swahiliName: SWAHILI_NAMES.TMO, price: null, change: null, direction: 'flat', bid: null, ask: null, updatedAt: null },
+  SGM: { symbol: 'SGM', englishName: 'Sorghum', swahiliName: SWAHILI_NAMES.SGM, price: null, change: null, direction: 'flat', bid: null, ask: null, updatedAt: null },
+  CAS: { symbol: 'CAS', englishName: 'Cassava', swahiliName: SWAHILI_NAMES.CAS, price: null, change: null, direction: 'flat', bid: null, ask: null, updatedAt: null },
+  PTO: { symbol: 'PTO', englishName: 'Potatoes', swahiliName: SWAHILI_NAMES.PTO, price: null, change: null, direction: 'flat', bid: null, ask: null, updatedAt: null },
+}
+
+const STEP_ITEMS = [
+  {
+    title: 'Tuma jina la zao',
+    body: 'Andika "mahindi" au "nyanya" kwenye WhatsApp na utume kwa CropEx.',
+    icon: '01',
+  },
+  {
+    title: 'Pata bei ya soko',
+    body: 'Tunarudisha bei ya leo, trend ya bei, na eneo la kusoma haraka.',
+    icon: '02',
+  },
+  {
+    title: 'Fanya uamuzi',
+    body: 'Uza, subiri, au nunua kwa confidence — bila kelele ya sokoni.',
+    icon: '03',
+  },
+] as const
+
+function isSymbolCode(value: string): value is SymbolCode {
+  return Object.prototype.hasOwnProperty.call(SWAHILI_NAMES, value)
+}
 
 function App() {
-  const [selectedSymbol, setSelectedSymbol] = useState<string>('MAZ');
-  const [marketData, setMarketData] = useState<Record<string, SymbolState>>({});
-  const [connectionStatus, setConnectionStatus] = useState<string>('DISCONNECTED');
-  const [news, setNews] = useState<{ title: string; source: string; url: string; publishedAt: string }[]>([]);
-
-  const [toasts, setToasts] = useState<Toast[]>([]);
-
-  const showToast = (message: string, type: 'BUY' | 'SELL') => {
-    const id = Date.now();
-    setToasts(prev => [...prev, { id, message, type }]);
-    
-    // Auto-remove after 3 seconds
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 3000);
-  };
-
-  const wsRef = useRef<WebSocket | null>(null);
+  const [quotes, setQuotes] = useState<Record<SymbolCode, QuoteState>>(INITIAL_QUOTES)
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'offline'>('connecting')
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8080');
-    wsRef.current = ws;
-    ws.onopen = () => setConnectionStatus('CONNECTED');
+    const socket = new WebSocket('ws://localhost:8080')
 
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
+    socket.onopen = () => setConnectionStatus('connected')
 
-      if (msg.type === 'newsBatch') {
-        setNews(msg.articles);
-        return;
-    }
-      const { symbol, price, bid, ask, bidVol, askVol, name, unit } = msg;
-      const time = Math.floor(msg.time / 1) * 1;
+    socket.onmessage = (event) => {
+      let payload: QuoteMessage
 
-      setMarketData(prev => {
-        const existing = prev[symbol];
-        const prevCandles = existing?.candles ?? [];
-        const lastCandle = prevCandles[prevCandles.length - 1];
+      try {
+        payload = JSON.parse(event.data) as QuoteMessage
+      } catch (error) {
+        console.error('CropEx received invalid websocket payload.', error)
+        return
+      }
 
-        let updatedCandles: CandleData[];
-        if (!lastCandle) {
-          updatedCandles = [{ time, open: price, high: price, low: price, close: price }];
-        } else if (time > lastCandle.time) {
-          updatedCandles = [...prevCandles, { time, open: price, high: price, low: price, close: price }];
-        } else {
-          const updated = { ...lastCandle, high: Math.max(lastCandle.high, price), low: Math.min(lastCandle.low, price), close: price };
-          updatedCandles = [...prevCandles.slice(0, -1), updated];
-        }
+      if (!payload || typeof payload.symbol !== 'string' || !isSymbolCode(payload.symbol)) {
+        return
+      }
+
+      setQuotes((previousQuotes) => {
+        const previous = previousQuotes[payload.symbol]
+        const previousPrice = previous.price ?? payload.price
+        const change = previousPrice > 0 ? ((payload.price - previousPrice) / previousPrice) * 100 : 0
+        const direction = change > 0 ? 'up' : change < 0 ? 'down' : 'flat'
 
         return {
-          ...prev,
-          [symbol]: { price, bid, ask, bidVol, askVol, name, unit, candles: updatedCandles }
-        };
-      });
-    };
+          ...previousQuotes,
+          [payload.symbol]: {
+            symbol: payload.symbol,
+            englishName: payload.name,
+            swahiliName: SWAHILI_NAMES[payload.symbol],
+            price: payload.price,
+            change,
+            direction,
+            bid: typeof payload.bid === 'number' ? payload.bid : null,
+            ask: typeof payload.ask === 'number' ? payload.ask : null,
+            updatedAt: payload.time,
+          },
+        }
+      })
+    }
 
-    ws.onclose = () => setConnectionStatus('DISCONNECTED');
-    return () => ws.close();
-  }, []);
+    socket.onerror = () => setConnectionStatus('offline')
+    socket.onclose = () => setConnectionStatus((current) => (current === 'connected' ? 'offline' : 'connecting'))
 
-  const isConnected = connectionStatus === 'CONNECTED';
-  const active = marketData[selectedSymbol];
-  const spread = (active?.ask && active?.bid)
-    ? (active.ask - active.bid).toFixed(2)
-    : '0.00';
+    return () => socket.close()
+  }, [])
+
+  const liveQuotes = useMemo(
+    () => SYMBOL_ORDER.map((symbol) => quotes[symbol]),
+    [quotes],
+  )
 
   return (
-    <div className="dashboard">
+    <div className="min-h-screen bg-black text-white">
+      <style>{styles}</style>
 
-      {/* ── HEADER ── */}
-      <header className="header">
-        <div className="brand-lockup">
-          <img src={logo} alt="CropEx" className="logo" />
-        </div>
-
-        <div className="header-center">
-          <span className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`} />
-          <span className={`status-label ${isConnected ? 'connected' : 'disconnected'}`}>
-            {connectionStatus}
-          </span>
-        </div>
-
-        <div className="header-ticker">
-          <div className="ticker-titles">
-            <span className="ticker-pair">{selectedSymbol} / KES</span>
-            <span className="ticker-name">{active?.name || '...'}</span>
+      <header className="border-b border-white/10">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 sm:px-8">
+          <div className="text-sm font-semibold tracking-[0.35em] uppercase">CropEx</div>
+          <div className="rounded-full border border-white/[0.15] px-3 py-1 text-[10px] font-medium uppercase tracking-[0.3em] text-white/[0.65]">
+            Bei za Leo
           </div>
-          <span className="ticker-price">{(active?.price ?? 0).toFixed(2)}</span>
         </div>
       </header>
 
-      {/* ── SYMBOL BAR ── */}
-      <div className="symbol-bar">
-        {SYMBOLS.map(sym => {
-          const s = marketData[sym];
-          return (
-            <button
-              key={sym}
-              className={`symbol-btn ${sym === selectedSymbol ? 'active' : ''}`}
-              onClick={() => setSelectedSymbol(sym)}
-            >
-              <span className="symbol-code">{sym}</span>
-              <span className="symbol-price">{(s?.price ?? 0).toFixed(0)}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── MAIN GRID ── */}
-      <div className="main-grid">
-
-        <div className="left-panel">
-          <div className="chart-container">
-            <ChartComponent
-              data={(active?.candles ?? []) as any}
-              colors={{ backgroundColor: '#161b22', textColor: '#c9d1d9' }}
-            />
-          </div>
-        </div>
-
-        <div className="right-panel">
-
-          <div className="panel order-book-panel">
-            <div className="panel-header">
-              ORDER BOOK
-              <span className="panel-header-sub">{active?.unit ?? ''}</span>
+      <main className="mx-auto max-w-7xl px-5 pb-16 sm:px-8">
+        <section className="grid gap-12 border-b border-white/10 py-16 lg:grid-cols-[1.15fr_0.85fr] lg:items-end lg:py-24">
+          <div className="max-w-3xl">
+            <div className="mb-6 flex items-center gap-3 text-[11px] uppercase tracking-[0.35em] text-white/[0.55]">
+              <span className={`status-dot ${connectionStatus}`} />
+              Live commodity intelligence
             </div>
-            <div className="ob-labels">
-              <span>PRICE</span><span>QUANTITY</span><span>CUMULATIVE</span>
-            </div>
-            <div className="ob-row ask">
-              <span>{(active?.ask ?? 0).toFixed(2)}</span>
-              <span>{active?.askVol ?? 0}</span>
-              <span>{(active?.ask ?? 0).toFixed(2)}</span>
-            </div>
-            <div className="ob-spread">⬌ {spread}</div>
-            <div className="ob-row bid">
-              <span>{(active?.bid ?? 0).toFixed(2)}</span>
-              <span>{active?.bidVol ?? 0}</span>
-              <span>{(active?.bid ?? 0).toFixed(2)}</span>
+            <h1 className="max-w-4xl text-5xl font-semibold leading-[0.95] tracking-tight sm:text-6xl lg:text-7xl">
+              Jua bei ya mazao yako kabla hujaenda sokoni.
+            </h1>
+            <p className="mt-6 max-w-2xl text-base leading-7 text-white/70 sm:text-lg">
+              Farmers hutuma jina la zao kwenye WhatsApp — tunarudisha bei ya leo, forecast ya soko, na advice ya haraka, free. Simple, local, and built for shamba life.
+            </p>
+            <div className="mt-8 flex flex-wrap items-center gap-4">
+              <a
+                href="#live-prices"
+                className="inline-flex items-center gap-3 rounded-full border border-[#1d9e75] bg-[#1d9e75] px-6 py-3 text-sm font-semibold text-black transition hover:opacity-90"
+              >
+                Anza Sasa — WhatsApp
+                <span aria-hidden="true">↗</span>
+              </a>
+              <p className="text-sm text-white/[0.55]">
+                Tuma crop name. Pata price. Fanya move.
+              </p>
             </div>
           </div>
 
-          <BuySellPanel 
-              currentPrice={active?.price ?? 0} 
-              symbol={selectedSymbol} 
-              name={active?.name ?? ''} 
-              onPlaceOrder={(side, price, qty) => {
-                  const order = {
-                      type: 'NEW_ORDER',
-                      symbol: selectedSymbol,
-                      side: side,
-                      price: price,
-                      qty: qty,
-                      timestamp: Date.now(),
-                      userId: "user_123" 
-                  };
-                  if (wsRef.current?.readyState === WebSocket.OPEN) {
-                      wsRef.current.send(JSON.stringify(order));
-                  } else {
-                      showToast("ERROR: NOT CONNECTED TO EXCHANGE", "SELL");
-                      return;
-                  }
-                  
-                  // 👇 REPLACED ALERT WITH TOAST 👇
-                  showToast(`ORDER SENT: ${side} ${qty} ${selectedSymbol} @ KES ${price.toFixed(2)}`, side);
-              }}
-          />
-          <NewsFeedPanel articles={news}/>
+          <aside className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-6">
+            <div className="flex items-center justify-between border-b border-white/10 pb-4">
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.3em] text-white/[0.45]">Snapshot</p>
+                <p className="mt-1 text-xl font-medium">Kenyan market pulse</p>
+              </div>
+              <div className="rounded-full border border-white/10 px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-white/50">
+                Live
+              </div>
+            </div>
+            <div className="mt-5 space-y-4 text-sm text-white/[0.68]">
+              <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
+                <span>Stocks za sokoni</span>
+                <span className="font-medium text-white">8 commodities</span>
+              </div>
+              <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
+                <span>Update cadence</span>
+                <span className="font-medium text-white">Real-time</span>
+              </div>
+              <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
+                <span>Advice language</span>
+                <span className="font-medium text-white">English + Swahili</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Access</span>
+                <span className="font-medium text-white">Free kwa farmer</span>
+              </div>
+            </div>
+          </aside>
+        </section>
 
-        </div>
-      </div>
-
-      {/* ── TOAST NOTIFICATIONS ── */}
-      <div className="toast-container">
-        {toasts.map(t => (
-          <div key={t.id} className={`toast ${t.type.toLowerCase()}`}>
-            <span className="toast-icon">{t.type === 'BUY' ? '▲' : '▼'}</span>
-            <span className="toast-msg">{t.message}</span>
+        <section id="live-prices" className="py-16">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.35em] text-white/[0.45]">Live prices</p>
+              <h2 className="mt-2 text-2xl font-semibold sm:text-3xl">Ticker ya leo — no candlesticks, just clean cards.</h2>
+            </div>
+            <p className="hidden text-sm text-white/50 md:block">KES / metric prices</p>
           </div>
-        ))}
-      </div>
 
+          <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {liveQuotes.map((quote) => (
+              <article key={quote.symbol} className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-white/[0.45]">{quote.symbol}</p>
+                    <h3 className="mt-2 text-xl font-medium">{quote.swahiliName}</h3>
+                    <p className="mt-1 text-sm text-white/[0.48]">{quote.englishName}</p>
+                  </div>
+                  <div className={`trend-chip ${quote.direction}`}>
+                    {quote.direction === 'up' ? '▲' : quote.direction === 'down' ? '▼' : '•'}
+                  </div>
+                </div>
+
+                <div className="mt-8 flex items-end justify-between gap-4">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.28em] text-white/[0.45]">Price</p>
+                    <p className="mt-2 text-3xl font-semibold tracking-tight">
+                      {quote.price === null ? '—' : `KES ${quote.price.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[11px] uppercase tracking-[0.28em] text-white/[0.45]">Change</p>
+                    <p className={`mt-2 text-sm font-semibold ${quote.direction === 'up' ? 'text-[#1d9e75]' : quote.direction === 'down' ? 'text-red-500' : 'text-white/[0.55]'}`}>
+                      {quote.change === null ? 'Waiting' : `${quote.change >= 0 ? '+' : ''}${quote.change.toFixed(2)}%`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-6 grid grid-cols-2 gap-3 text-sm text-white/58">
+                  <div className="rounded-xl border border-white/[0.08] px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-[0.25em] text-white/[0.35]">Bid</p>
+                    <p className="mt-1 font-medium text-white">{quote.bid === null ? '—' : quote.bid.toLocaleString('en-KE')}</p>
+                  </div>
+                  <div className="rounded-xl border border-white/[0.08] px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-[0.25em] text-white/[0.35]">Ask</p>
+                    <p className="mt-1 font-medium text-white">{quote.ask === null ? '—' : quote.ask.toLocaleString('en-KE')}</p>
+                  </div>
+                </div>
+
+                <p className="mt-4 text-xs text-white/[0.35]">
+                  {quote.updatedAt === null ? 'Waiting for websocket data...' : `Updated ${new Date(quote.updatedAt * 1000).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' })}`}
+                </p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="border-y border-white/10 py-16">
+          <p className="text-[11px] uppercase tracking-[0.35em] text-white/[0.45]">How it works</p>
+          <div className="mt-4 grid gap-4 lg:grid-cols-3">
+            {STEP_ITEMS.map((item) => (
+              <article key={item.title} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+                <div className="flex items-center justify-between">
+                  <div className="text-3xl font-semibold tracking-tight text-white/[0.35]">{item.icon}</div>
+                  <div className="h-px flex-1 bg-white/10" />
+                </div>
+                <h3 className="mt-8 text-xl font-medium">{item.title}</h3>
+                <p className="mt-3 max-w-sm text-sm leading-6 text-white/[0.65]">{item.body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      </main>
+
+      <footer className="border-t border-white/10 px-5 py-6 text-center text-sm text-white/[0.45] sm:px-8">
+        CropEx © 2026. Powered by real market data.
+      </footer>
     </div>
-  );
+  )
 }
 
-/* ── BUY / SELL PANEL ── */
-function BuySellPanel({ 
-  currentPrice, 
-  symbol, 
-  name, 
-  onPlaceOrder 
-}: { 
-  currentPrice: number; 
-  symbol: string; 
-  name: string;
-  onPlaceOrder: (side: 'BUY' | 'SELL', price: number, qty: number) => void;
-}) {
-  const [qty, setQty] = useState<string>('');
-  // We use currentPrice as default, but a real trader could type a limit order price here
-  const [orderPrice, setOrderPrice] = useState<string>('');
+const styles = `
+  html {
+    scroll-behavior: smooth;
+  }
 
-  const handleTrade = (side: 'BUY' | 'SELL') => {
-    const finalPrice = orderPrice ? parseFloat(orderPrice) : currentPrice;
-    const finalQty = parseInt(qty);
+  body {
+    margin: 0;
+    background: #000;
+    color: #fff;
+    font-family:
+      Inter,
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      sans-serif;
+  }
 
-    if (!finalQty || finalQty <= 0) {
-      alert("Please enter a valid quantity.");
-      return;
-    }
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 9999px;
+    background: #666;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.04);
+  }
 
-    onPlaceOrder(side, finalPrice, finalQty);
-    setQty(''); // clear input after ordering
-  };
+  .status-dot.connected {
+    background: #1d9e75;
+  }
 
-  return (
-    <div className="panel buysell-panel">
-      <div className="panel-header">
-        TRADE {name.toUpperCase()}
-        <span className="panel-header-sub">KES {currentPrice.toFixed(2)}</span>
-      </div>
-      <div className="bs-inputs">
-        <div className="bs-input-group">
-          <span className="bs-input-icon">KES</span>
-          <input 
-            className="bs-input" 
-            type="number" 
-            placeholder={currentPrice.toFixed(2)} 
-            value={orderPrice}
-            onChange={(e) => setOrderPrice(e.target.value)}
-          />
-        </div>
-        <input 
-          className="bs-input" 
-          type="number" 
-          placeholder="QUANTITY (bags)" 
-          value={qty}
-          onChange={(e) => setQty(e.target.value)}
-        />
-      </div>
-      <div className="bs-buttons">
-        <button className="bs-btn sell" onClick={() => handleTrade('SELL')}>SELL {symbol}</button>
-        <button className="bs-btn buy" onClick={() => handleTrade('BUY')}>BUY {symbol}</button>
-      </div>
-    </div>
-  );
-}
-/* ── NEWS FEED PANEL ── */
-function NewsFeedPanel({ articles }: { articles: { title: string; source: string; url: string; publishedAt: string }[] }) {
-    const items = articles.length > 0 ? articles : [
-        { title: 'Waiting for news feed...', source: '', url: '#', publishedAt: '' }
-    ];
+  .status-dot.connecting {
+    background: #777;
+  }
 
-    return (
-        <div className="panel news-panel">
-            <div className="panel-header">
-                MARKET NEWS
-                <span className="panel-header-badge">LIVE</span>
-            </div>
-            <div className="news-list">
-                {items.map((item, i) => (
-                    <div className="news-item" key={i} onClick={() => item.url !== '#' && window.open(item.url, '_blank')}
-                         style={{ cursor: item.url !== '#' ? 'pointer' : 'default' }}>
-                        <span className="news-time">{item.source}</span>
-                        <span className="news-text">{item.title}</span>
-                    </div>
-                ))}
-            </div>
+  .status-dot.offline {
+    background: #b91c1c;
+  }
 
-            
-        </div>
-    );
-}
-export default App;
+  .trend-chip {
+    display: inline-flex;
+    height: 2rem;
+    width: 2rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 0.75rem;
+  }
+
+  .trend-chip.up {
+    color: #1d9e75;
+    background: rgba(29, 158, 117, 0.08);
+  }
+
+  .trend-chip.down {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.08);
+  }
+
+  .trend-chip.flat {
+    color: rgba(255, 255, 255, 0.65);
+    background: rgba(255, 255, 255, 0.03);
+  }
+`
+
+export default App
